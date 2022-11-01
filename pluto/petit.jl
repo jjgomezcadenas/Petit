@@ -38,7 +38,7 @@ begin
 	using Unitful 
 	#using UnitfulEquivalences 
 	#using PhysicalConstants
-	#using Peaks
+	using Peaks
 	#using FFTW
 	#using DSP
 	#using Clustering
@@ -59,6 +59,11 @@ md"""
 # Analysis
 """
 
+# ╔═╡ 918dc9ec-f027-4d68-8290-96f7f56a416a
+md"""
+## Read the data
+"""
+
 # ╔═╡ 3274825d-61a0-4856-9340-97420d237c27
 begin
 	dfiles ="*.h5"
@@ -66,32 +71,74 @@ begin
 	xfiles = Glob.glob(dfiles, xpath)
 end
 
-# ╔═╡ a2baefc2-236c-4b98-a9d1-1506feacaee0
+# ╔═╡ 42550f71-0d65-4569-8332-41774a979e67
+md"""
+## Control plots
+"""
 
+# ╔═╡ 59a1dffb-6902-4cb0-8650-a23498794f49
+md"""
+## Single SiPM analysis
+"""
 
 # ╔═╡ bd496019-51e2-46ee-96e7-048bf53dc547
-md""" Plane 2: select rmin histogram: $(@bind rmin NumberField(300.0:375.0, default=330.0))"""
+md""" Plane 2: select rmin histogram: $(@bind rmin NumberField(50.0:650.0, default=300.0))"""
 
 # ╔═╡ 99eb99db-56f7-4884-bb1a-ca362fee1ba0
-md""" Plane 2: select rmax histogram: $(@bind rmax NumberField(400.0:450.0, default=430.0))"""
+md""" Plane 2: select rmax histogram: $(@bind rmax NumberField(400.0:600.0, default=500.0))"""
 
 # ╔═╡ a88457ad-0f1c-4ca8-babf-5eaf3f040de7
 rbins = Int(rmax - rmin)
 
-# ╔═╡ db275e86-b644-4982-8666-6eda78ed5072
-md""" Plane 2: select xmin fit: $(@bind sxmin NumberField(350.0:450.0, default=375.0))"""
+# ╔═╡ f43ddffc-c0da-4140-9ddd-5668708129a4
+md""" Plane 2: select width of peak for fit: $(@bind wpeak NumberField(5.0:20.0, default=10.0))"""
 
-# ╔═╡ b8cb9917-bb46-43a8-95a1-a05e6c2d0d7f
-md""" Plane 2: select max fit: $(@bind sxmax NumberField(350.0:450.0, default=400.0))"""
-
-# ╔═╡ ca6b160a-bbea-4ae0-8ab0-de31c387d439
-ftbins = Int(sxmax - sxmin)
-
-# ╔═╡ a71cbe76-0a65-4cf9-be46-0cc695b55204
+# ╔═╡ 1b9a7002-8ad6-42aa-a691-620923daedf0
 md"""
-test
-	-a
- 	-b
+### ML unbinned fit 
+"""
+
+# ╔═╡ 7c4bf607-3d3c-4f70-9ffb-fe601ac92487
+md"""
+### Binned fit 
+"""
+
+# ╔═╡ 08c2ea5c-137a-42db-9043-135cc4b3231e
+md"""
+## Multi SiPM analysis
+"""
+
+# ╔═╡ 44eb878c-7c78-42e9-87b1-32d919ae2c3f
+bad_sipms=[116,119,120, 123, 129, 130, 133, 134, 139, 140, 149, 150, 159, 160, 169, 170, 171, 179, 180, 181]
+
+# ╔═╡ 61fb8aab-598c-4dd7-9b45-4ade34436d05
+all_sipms = collect(111:188)
+
+# ╔═╡ e451863b-1c4f-49de-9c6c-7d2f41388d37
+nsipms = setdiff(all_sipms, bad_sipms) #sipms in all not in bad
+
+# ╔═╡ 60101f34-d408-4b6e-9813-33edafcdabcf
+md"""
+### Unbinned
+"""
+
+# ╔═╡ 5b05ebab-e416-4550-8dcb-a8a3fcf41f2f
+#begin
+	#hrfw, prfw = hist1d(rml, "R (FWHM)", 20, 0.0, 0.05)
+	#plot(prfw)
+#end
+
+# ╔═╡ 120a9a67-45dc-410f-85cf-2e66f679b276
+#for sp in nsipms[1]
+#	println("sp = ", sp)
+#	rmx =rfmle(sp)
+#	@printf "R = %7.4f" rmx
+#	println("")
+#end
+
+# ╔═╡ 1004c6bb-07bf-4334-a0e8-feeb0d94e295
+md"""
+### Binned
 """
 
 # ╔═╡ c0816fb9-00c7-41c4-b2e4-da4dc50fdbd1
@@ -178,28 +225,56 @@ md""" Plane 2: select sipm index: $(@bind nspm NumberField(snsp2[1]:snsp2[end], 
 # ╔═╡ de099068-fbe4-428a-89d7-6b6119c52fb9
 begin
 	spmdf = gnspm2[(nspm,)]
-	hspmc2, pspmc2 = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", 50, 100., 600.0)
-	hspsc2, pspsc2 = hist1d(Float64.(spmdf.sum_charge2), "sum charge plane 2", 50, 100., 600.0)
-	plot(pspmc2, pspsc2)
+	hspmc2, pspmc2 = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", 250, 100., 600.0)
+	#hspsc2, pspsc2 = hist1d(Float64.(spmdf.sum_charge2), "sum charge plane 2", 50, 100., 600.0)
+	plot(pspmc2)
 end
 
 # ╔═╡ 768d7845-a601-46e4-a86c-09d98d35f715
 begin
-	h2spmc2, p2spmc2 = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", 100, rmin, rmax)
+	h2spmc2, p2spmc2 = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", rbins, rmin, rmax)
 	plot(p2spmc2)
 end
 
-# ╔═╡ 67acec5f-a69e-4af7-98e8-8c8fcdec77b1
-argmax(h2spmc2.weights)
+# ╔═╡ 0ad899a0-5848-4f27-ada1-fc9aa5e7339b
+"""
+Finds the positin of the photopeak as the peak with larger prominence in histogram
+"""
+function find_photopeak(h)
+	pks, vals = findmaxima(h.weights)
+	peaks, proms = peakproms(pks, h.weights)
+	mxprom = findmax(proms)
+	ppeak = pks[mxprom[2]]
+	centers(h2spmc2)[ppeak]
+end
 
-# ╔═╡ 0020aaac-a114-4cfb-bdba-955b4f0fdabd
-centers(h2spmc2)[argmax(h2spmc2.weights)]
+# ╔═╡ 7bea5385-9bc5-4eb5-86ef-d3030b9e2159
+xpeak = find_photopeak(h2spmc2)
+
+# ╔═╡ 23c2e8d7-18de-4494-94e6-4acc2aff3127
+begin
+	xmin = xpeak - wpeak 
+	xmax = xpeak + wpeak +2 # asymmetric on the right 
+end
+
+# ╔═╡ db275e86-b644-4982-8666-6eda78ed5072
+md""" Plane 2: select xmin fit: $(@bind sxmin NumberField(100.0:600.0, default=xmin))"""
+
+# ╔═╡ b8cb9917-bb46-43a8-95a1-a05e6c2d0d7f
+md""" Plane 2: select max fit: $(@bind sxmax NumberField(100.0:600.0, default=xmax))"""
+
+# ╔═╡ ca6b160a-bbea-4ae0-8ab0-de31c387d439
+ftbins = Int(sxmax - sxmin)
 
 # ╔═╡ 65bb374d-aa0a-4c97-aab7-1be14120d137
 md"""
+- maximum of distribution = $(xpeak)
+- semidiwth for fit = $(wpeak)
+
 fit limits: 
-- xmin = $(centers(h2spmc2)[argmax(h2spmc2.weights)] -12)
-- xmax = $(centers(h2spmc2)[argmax(h2spmc2.weights)] +12)
+- xmin = $(xmin)
+- xmax = $(xmax)
+- number of bins = $(ftbins)
 """
 
 # ╔═╡ c0ba6116-ae04-4ab5-a5c8-08d623444a3e
@@ -324,6 +399,14 @@ end
 # ╔═╡ 6f34b6ab-ba5a-4e5b-aee8-f53b78c4e260
 lftmu = fmu(lft2)
 
+# ╔═╡ 42e41d5a-bbf4-4423-ab3d-0e8afc326990
+fg, pg = fitg1(Float64.(spmdf.max_charge2),"E (LSB)", rbins, rmin, rmax;
+	           xgmin=sxmin, xgmax=sxmax, fbins=ftbins, norm=true,
+               fm=lftmu.var, flex_mean=true)
+
+# ╔═╡ 026d5f3e-0e02-4692-8cbd-3af88a61f603
+plot(pg)
+
 # ╔═╡ af825b53-e0a3-4296-ab5b-a467800c18ee
 """
 Takes a fit object and returns relative resolution FWHM (2.355 * sigma/mu)
@@ -334,6 +417,13 @@ function rfromft(lftmu, lftsigma)
 	(var=R, delta=δR)
 end
 
+# ╔═╡ 2d18834e-70f2-47f0-9238-026d1d6fe462
+function rfromft(fg::ATools.FGauss)
+	R = 2.355 * fg.std[1]/fg.mu[1]
+	δR = R * fg.δstd[1]/fg.std[1]  # mu is negligible
+	(var=R, delta=δR)
+end
+
 # ╔═╡ c70f9dde-2cb3-4057-b928-b02d1d3b46cf
 rfft = rfromft(lftmu, lftsigma)
 
@@ -341,12 +431,12 @@ rfft = rfromft(lftmu, lftsigma)
 md"""
 Fit result:
 - μ = $(round(lftmu.var, sigdigits=3)) +- $(round(lftmu.delta, sigdigits=2))
-- σ = $(round(lftsigma.var, sigdigits=2)) +- $(round(lftsigma.delta, sigdigits=2))
-- R = $(round(rfft.var, sigdigits=2)) +- $(round(rfft.delta,sigdigits=2))
+- σ = $(round(lftsigma.var, sigdigits=3)) +- $(round(lftsigma.delta, sigdigits=2))
+- R = $(round(rfft.var, sigdigits=3)) +- $(round(rfft.delta,sigdigits=2))
 """
 
-# ╔═╡ 2d18834e-70f2-47f0-9238-026d1d6fe462
-#@. gauss1(x, p)   = p[1] * pdf(Normal(p[2], p[3]), x)
+# ╔═╡ 62806e24-1db6-4f57-8a46-c0a7875e431c
+R, dR = rfromft(fg)
 
 # ╔═╡ 540fa65f-0d85-457c-a6f2-ad4bc1799408
 """
@@ -364,7 +454,7 @@ end
 """
 Histogram vector x, fit a Normal distribution and plot
 """
-function plotfit(x::Vector{Float64}, nbins::Int64, xmin::Float64, xmax::Float64,
+function histfit(x::Vector{Float64}, nbins::Int64, xmin::Float64, xmax::Float64,
                   ftbins::Int64, ftmin::Float64, ftmax::Float64, norm=false)
 
 	fdset = filter(x->x>ftmin && x<ftmax, x)
@@ -392,32 +482,155 @@ function plotfit(x::Vector{Float64}, nbins::Int64, xmin::Float64, xmax::Float64,
 	lbl = @sprintf "R =%4.5f  FWHM" 2.355 * fmle.σ/ fmle.μ
     p   = plot!(p, c, gx.(c), lw=2, label=lbl, legend=true, fmt = :png)
 	xlabel!("E (LSB)")
-	p
+	(μ=fmle.μ, σ=fmle.σ, C = CC, gx= gx, plt=p)
 
 end
-
-# ╔═╡ c7879c6a-c905-4cd0-9661-2cb924a09702
-plotfit(Float64.(spmdf.max_charge2), rbins, rmin, rmax, 
-               ftbins, sxmin, sxmax)
 
 # ╔═╡ cac298c3-c090-4884-82d2-20cb2bc53e64
 """
 	Compute the chi2 of a binned fit to x, with nbins between xmin and xmax
 """
-function fitchi2(x, fg, nbins, xmin, xmax)
-	h = hist1d(x, nbins, xmin+0.5, xmax+0.5)
-	e = edges(h)
-	ec = [(e[i+1] + e[i])/2.0 for i in 1:length(e)-1]
-	w = h.weights
-	O = w
-	ff = fg.g[1]
-	E = ff.(ec)
-	length(O), length(E)
-	num = (O .- E) .* (O .- E)
-	denom = E
-	ndf = length(e) 
-	sum(num ./ denom) /ndf
+function fitchi2(x::Vector{Float64}, nbins::Int64, xmin::Float64, xmax::Float64, gx; 
+                 imin::Int64=1)
+	h = hist1d(x, nbins, xmin, xmax)
+	c = centers(h)
+	O = h.weights
+	E = gx.(c)
+	num = [(O[i] - E[i])^2 for i in imin:length(c)]
+	#num = (O .- E) .* (O .- E)
+	denom = E[imin:end]
+	ndf = length(c) - imin
+	chi2 = sum(num ./ denom) /ndf
+	(C=c, E = E, O = O, chi2=chi2)
 end
+
+# ╔═╡ d63eee83-0284-4ec6-95ba-f2f93d5f9ffc
+"""
+	Compute the chi2 of a binned fit to x, with nbins between xmin and xmax
+"""
+function fitchi2(fg::ATools.FGauss; imin::Int64=1)
+	h = fg.h
+	c = centers(h)
+	O = h.weights
+	E = fg.Y
+	num = [(O[i] - E[i])^2 for i in imin:length(c)]
+	denom = E[imin:end]
+	ndf = length(c) - imin
+	chi2 = sum(num ./ denom) /ndf
+	(C=c, E = E, O = O, chi2=chi2)
+end
+
+# ╔═╡ 2de40ccb-d795-449a-9939-c0f23cbbe1bc
+fch2= fitchi2(fg, imin=4)
+
+# ╔═╡ 8d002405-6bb7-450d-8368-1026df3190b9
+begin
+	scatter(fch2.C, fch2.E,  yerr=sqrt.(fch2.E), label="fit")
+	scatter!(fch2.C, fch2.O,  yerr=sqrt.(fch2.O), label="data")
+	plot!(fch2.C, fg.g[1].(fch2.C), label="gauss")
+end
+
+# ╔═╡ b17ef99c-221a-47f7-9080-9e04c722281e
+md"""
+Binned Fit results:
+- μ = $(round(fg.mu[1], sigdigits=2))
+- σ = $(round(fg.std[1], sigdigits=2))
+- chi2 = $(round(fch2.chi2, sigdigits=2))
+- R = $(round(R, sigdigits=3)) +- $(round(dR, sigdigits=3)) FWHM
+"""
+
+# ╔═╡ 9294ca23-4a6a-465e-a840-5edc04dbe2eb
+"""
+Compute R (FWHM) using ML
+"""
+function rfmle(nspmx, nbin=200, bmin=300.0, bmax=500.0; ftm="unbin", wpeak=10)
+	#println("nsipm =", nspmx)
+	spmdf = gnspm2[(nspmx,)]
+	h2spmc2, _ = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", nbin, bmin, bmax)
+	
+	xpeak = find_photopeak(h2spmc2)
+	xmin = ceil(xpeak - wpeak)
+	xmax = ceil(xpeak + wpeak +2)  # asymmetric on the right 
+	ftbins = Int(xmax - xmin)
+	
+	#println("xmin =", xmin, " xmax = ", xmax, " xpeak = ", xpeak, " bins =", ftbins)
+
+	if ftm == "unbin"
+		ftmle = norm_mle_fit(Float64.(spmdf.max_charge2), xmin, xmax)
+		lft   = norm_mle_var(Float64.(spmdf.max_charge2), xmin, xmax, var="σ", sr=0.15)
+		lftsigma = fsigma(lft)
+		lft2 = norm_mle_var(Float64.(spmdf.max_charge2), xmin, xmax, var="μ", sr=0.25)
+		lftmu = fmu(lft2)
+		rfft = rfromft(lftmu, lftsigma)
+		return rfft.var
+	else
+
+		fg, pg = fitg1(Float64.(spmdf.max_charge2),"E (LSB)", nbin, bmin, bmax;
+		               xgmin=xmin, xgmax=xmax, fbins=ftbins, flex_mean=true)
+		R, dR = rfromft(fg)
+		fch2= fitchi2(fg, imin=4)
+		return R
+	end
+end
+
+# ╔═╡ 95afa3bc-7cbc-4f93-bc31-5829a96037f2
+rml = map(x->rfmle(x, ftm="unbin"), nsipms)
+
+# ╔═╡ 41005dd9-3303-4994-b78f-13580fa90a86
+rmlb = map(x->rfmle(x, ftm="bin"), nsipms)
+
+# ╔═╡ b5a5a985-1111-43f9-8cce-5cd68531c735
+begin
+	srml = scatter(nsipms, rml, label="R unbin")
+	srmlb = scatter(nsipms, rmlb, label="R bin")
+	plot(size=(600,600),srml, srmlb)
+end
+
+# ╔═╡ 12ce6070-a101-410d-a018-0df3633bef0d
+begin
+	hrfw, prfw = hist1d(rml, "R (FWHM)", 40, 0.0, 0.08)
+	hrfwb, prfwb = hist1d(rmlb, "R (FWHM)", 40, 0.0, 0.08)
+	plot( prfw, prfwb)
+end
+
+# ╔═╡ 8c87548d-6bbb-4130-adf9-3ef4c2ec91ae
+md"""
+- Unbinned:  R = $(round(mean(rml), sigdigits=3)) +- $(round(std(rml), sigdigits=3))
+- Binned: R = $(round(mean(rmlb), sigdigits=3)) +- $(round(std(rmlb), sigdigits=3))
+"""
+
+# ╔═╡ 3d29bc36-530c-4999-b9fe-58bf46a6c712
+begin
+	rml2 = map(x->rfmle(x, ftm="unbin", wpeak=12), nsipms)
+	rmlb2 = map(x->rfmle(x, ftm="bin", wpeak=12), nsipms)
+	hrfw2, prfw2 = hist1d(rml2, "R (FWHM)", 40, 0.0, 0.08)
+	hrfwb2, prfwb2 = hist1d(rmlb2, "R (FWHM)", 40, 0.0, 0.08)
+	plot(prfw2, prfwb2)
+end
+
+# ╔═╡ 632a6398-8213-45c1-8c29-fa419e1c1739
+md"""
+- Unbinned:  R = $(round(mean(rml2), sigdigits=3)) +- $(round(std(rml2), sigdigits=3))
+- Binned: R = $(round(mean(rmlb2), sigdigits=3)) +- $(round(std(rmlb2), sigdigits=3))
+"""
+
+# ╔═╡ adfc0a99-656c-4b3c-aec3-e0a2ceb4cbec
+begin
+	rml3 = map(x->rfmle(x, ftm="unbin", wpeak=8), nsipms)
+	rmlb3 = map(x->rfmle(x, ftm="bin", wpeak=8), nsipms)
+	hrfw3, prfw3 = hist1d(rml3, "R (FWHM)", 40, 0.0, 0.08)
+	hrfwb3, prfwb3 = hist1d(rmlb3, "R (FWHM)", 40, 0.0, 0.08)
+	plot(prfw3, prfwb3)
+end
+
+# ╔═╡ 36d29dd1-7df7-457f-97a4-70db9e707c3b
+md"""
+- Unbinned:  R = $(round(mean(rml3), sigdigits=3)) +- $(round(std(rml3), sigdigits=3))
+- Binned: R = $(round(mean(rmlb3), sigdigits=3)) +- $(round(std(rmlb3), sigdigits=3))
+"""
+
+# ╔═╡ e1ce8dd8-e66e-444e-bf04-a8d1378b6d71
+fg
 
 # ╔═╡ Cell order:
 # ╠═805955a4-f018-4e68-a68a-1e6b64a99378
@@ -425,26 +638,30 @@ end
 # ╠═a69771ca-f756-4f84-8bb4-1c044fa4db1f
 # ╠═f75fa3dd-d3dc-4f5d-877b-cc9d8f57d95c
 # ╠═921fb297-2c3d-4f45-847c-b2f009052e9f
+# ╠═918dc9ec-f027-4d68-8290-96f7f56a416a
 # ╠═3274825d-61a0-4856-9340-97420d237c27
 # ╠═082a3d2a-c915-4c98-9221-d4610ae112bc
 # ╠═71f427b9-4a44-492c-a826-1bb403fcf7aa
+# ╠═42550f71-0d65-4569-8332-41774a979e67
 # ╠═52f6a0e2-a5f6-452e-ba45-14958b9ee3a4
 # ╠═7690127a-b6ab-4661-aea3-6be93c0f8760
 # ╠═519399b4-8f8c-4fcb-bfe3-4f7d7d67e761
+# ╠═59a1dffb-6902-4cb0-8650-a23498794f49
 # ╠═58670f80-1bf2-4af1-a588-42d52f0394fb
 # ╠═f2476981-326f-4f7e-b796-90a9f357ee4a
-# ╠═a2baefc2-236c-4b98-a9d1-1506feacaee0
 # ╠═de099068-fbe4-428a-89d7-6b6119c52fb9
 # ╠═bd496019-51e2-46ee-96e7-048bf53dc547
 # ╠═99eb99db-56f7-4884-bb1a-ca362fee1ba0
 # ╠═a88457ad-0f1c-4ca8-babf-5eaf3f040de7
 # ╠═768d7845-a601-46e4-a86c-09d98d35f715
-# ╠═67acec5f-a69e-4af7-98e8-8c8fcdec77b1
-# ╠═0020aaac-a114-4cfb-bdba-955b4f0fdabd
+# ╠═7bea5385-9bc5-4eb5-86ef-d3030b9e2159
+# ╠═f43ddffc-c0da-4140-9ddd-5668708129a4
+# ╠═23c2e8d7-18de-4494-94e6-4acc2aff3127
 # ╠═65bb374d-aa0a-4c97-aab7-1be14120d137
 # ╠═db275e86-b644-4982-8666-6eda78ed5072
 # ╠═b8cb9917-bb46-43a8-95a1-a05e6c2d0d7f
 # ╠═ca6b160a-bbea-4ae0-8ab0-de31c387d439
+# ╠═1b9a7002-8ad6-42aa-a691-620923daedf0
 # ╠═e16ea9bc-7aa6-47a6-9a86-8d0f656dc002
 # ╠═328768e0-c381-4060-b547-282ad0ae43dc
 # ╠═b72281dd-e4b1-4c0f-ab1d-8d9df19aa837
@@ -455,11 +672,35 @@ end
 # ╠═6f34b6ab-ba5a-4e5b-aee8-f53b78c4e260
 # ╠═c70f9dde-2cb3-4057-b928-b02d1d3b46cf
 # ╠═b408ba82-5b66-4200-8300-dbf50d67caf1
-# ╠═a71cbe76-0a65-4cf9-be46-0cc695b55204
-# ╠═c7879c6a-c905-4cd0-9661-2cb924a09702
+# ╠═7c4bf607-3d3c-4f70-9ffb-fe601ac92487
+# ╠═42e41d5a-bbf4-4423-ab3d-0e8afc326990
+# ╠═026d5f3e-0e02-4692-8cbd-3af88a61f603
+# ╠═62806e24-1db6-4f57-8a46-c0a7875e431c
+# ╠═2de40ccb-d795-449a-9939-c0f23cbbe1bc
+# ╠═8d002405-6bb7-450d-8368-1026df3190b9
+# ╠═b17ef99c-221a-47f7-9080-9e04c722281e
+# ╠═08c2ea5c-137a-42db-9043-135cc4b3231e
+# ╠═44eb878c-7c78-42e9-87b1-32d919ae2c3f
+# ╠═61fb8aab-598c-4dd7-9b45-4ade34436d05
+# ╠═e451863b-1c4f-49de-9c6c-7d2f41388d37
+# ╠═60101f34-d408-4b6e-9813-33edafcdabcf
+# ╠═95afa3bc-7cbc-4f93-bc31-5829a96037f2
+# ╠═5b05ebab-e416-4550-8dcb-a8a3fcf41f2f
+# ╠═120a9a67-45dc-410f-85cf-2e66f679b276
+# ╠═1004c6bb-07bf-4334-a0e8-feeb0d94e295
+# ╠═41005dd9-3303-4994-b78f-13580fa90a86
+# ╠═b5a5a985-1111-43f9-8cce-5cd68531c735
+# ╠═12ce6070-a101-410d-a018-0df3633bef0d
+# ╠═8c87548d-6bbb-4130-adf9-3ef4c2ec91ae
+# ╠═3d29bc36-530c-4999-b9fe-58bf46a6c712
+# ╠═632a6398-8213-45c1-8c29-fa419e1c1739
+# ╠═adfc0a99-656c-4b3c-aec3-e0a2ceb4cbec
+# ╠═36d29dd1-7df7-457f-97a4-70db9e707c3b
 # ╠═c0816fb9-00c7-41c4-b2e4-da4dc50fdbd1
+# ╠═9294ca23-4a6a-465e-a840-5edc04dbe2eb
 # ╠═88aab6f6-07a8-42c4-b39f-33ed7bb0a75b
 # ╠═ee8468ab-2987-497c-83ac-720902561490
+# ╠═0ad899a0-5848-4f27-ada1-fc9aa5e7339b
 # ╠═c0ba6116-ae04-4ab5-a5c8-08d623444a3e
 # ╠═54874b4d-2faf-47d5-b68f-17fb532de95c
 # ╠═41ec942b-4c04-4b43-8475-d4a14fae02c2
@@ -470,3 +711,5 @@ end
 # ╠═540fa65f-0d85-457c-a6f2-ad4bc1799408
 # ╠═38e444f9-1bc1-43ac-972b-75e072ca8cac
 # ╠═cac298c3-c090-4884-82d2-20cb2bc53e64
+# ╠═d63eee83-0284-4ec6-95ba-f2f93d5f9ffc
+# ╠═e1ce8dd8-e66e-444e-bf04-a8d1378b6d71
