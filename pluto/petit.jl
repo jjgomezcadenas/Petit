@@ -117,10 +117,18 @@ all_sipms = collect(111:188)
 # ╔═╡ e451863b-1c4f-49de-9c6c-7d2f41388d37
 nsipms = setdiff(all_sipms, bad_sipms) #sipms in all not in bad
 
+# ╔═╡ 7ac98d50-0edd-40c9-94bf-eb4fb8cdf706
+md"""
+### Charge
+"""
+
 # ╔═╡ 60101f34-d408-4b6e-9813-33edafcdabcf
 md"""
-### Unbinned
+### Unbinned resolution 
 """
+
+# ╔═╡ 5fc2c3b0-3cdf-4bdd-9f83-408a68a78f97
+
 
 # ╔═╡ 5b05ebab-e416-4550-8dcb-a8a3fcf41f2f
 #begin
@@ -140,6 +148,23 @@ md"""
 md"""
 ### Binned
 """
+
+# ╔═╡ 8efc9eb5-603e-4799-92f0-46a30de30dc3
+
+
+# ╔═╡ a49f93d5-5106-48ac-8107-4f579374b85d
+md"""
+## Resolution intrinsic
+"""
+
+# ╔═╡ 26db5f86-93ac-440a-b6d5-cce090f4866c
+RFWHM(σm, σp) = sqrt(σm^2 - σp^2)
+
+# ╔═╡ d3a19c59-602f-4e26-9a19-a0b8ebb2584b
+RFWHM(0.03, 0.025) 
+
+# ╔═╡ 2f125bdc-c551-49d3-959f-cc539be6d69c
+sqrt(0.03^2 - 0.0255^2)
 
 # ╔═╡ c0816fb9-00c7-41c4-b2e4-da4dc50fdbd1
 md"""
@@ -218,6 +243,9 @@ begin
 	"""
 end
 
+# ╔═╡ 4271b7ae-62ad-42e9-a298-b7d9cb07bb86
+length(snsp2)
+
 # ╔═╡ f2476981-326f-4f7e-b796-90a9f357ee4a
 md""" Plane 2: select sipm index: $(@bind nspm NumberField(snsp2[1]:snsp2[end], default=snsp2[1]))"""
 
@@ -235,6 +263,31 @@ begin
 	h2spmc2, p2spmc2 = hist1d(Float64.(spmdf.max_charge2), "max charge plane 2", rbins, rmin, rmax)
 	plot(p2spmc2)
 end
+
+# ╔═╡ 3dbe8495-cee9-4d1a-8a9a-4003db5e9149
+"""
+Compute charge 
+"""
+function qsipms(nspmx)
+	spmdf = gnspm2[(nspmx,)]
+	Float64.(spmdf.max_charge2)
+end
+
+
+# ╔═╡ a578676e-3daa-46f0-90dd-1699b62d4605
+qs = map(x->qsipms(x), nsipms)
+
+# ╔═╡ 82cd3877-56bb-47ae-b0fd-0f2062cd4386
+qsm = map(x->maximum(x), qs)
+
+# ╔═╡ 85760432-a6ed-4823-8e00-4835571ed340
+begin
+	hqs, pqs = hist1d(qsm, "Q (LSB)", 25, 400.0, 600.0; datap=false)
+	plot(pqs)
+end
+
+# ╔═╡ 10184c1e-601c-4763-98b7-73a42f64e7e5
+length(qs)
 
 # ╔═╡ 0ad899a0-5848-4f27-ada1-fc9aa5e7339b
 """
@@ -405,7 +458,7 @@ fg, pg = fitg1(Float64.(spmdf.max_charge2),"E (LSB)", rbins, rmin, rmax;
                fm=lftmu.var, flex_mean=true)
 
 # ╔═╡ 026d5f3e-0e02-4692-8cbd-3af88a61f603
-plot(pg)
+plot(pg, legend=false)
 
 # ╔═╡ af825b53-e0a3-4296-ab5b-a467800c18ee
 """
@@ -576,6 +629,13 @@ end
 # ╔═╡ 95afa3bc-7cbc-4f93-bc31-5829a96037f2
 rml = map(x->rfmle(x, ftm="unbin"), nsipms)
 
+# ╔═╡ 5fbae887-ff4f-4aa0-823e-f1284cc5d0b2
+begin
+	srq = scatter(qsm, rml, legend=false)
+	xlabel!("Q (LSB)")
+	ylabel!("σ (FWHM)")
+end
+
 # ╔═╡ 41005dd9-3303-4994-b78f-13580fa90a86
 rmlb = map(x->rfmle(x, ftm="bin"), nsipms)
 
@@ -588,10 +648,13 @@ end
 
 # ╔═╡ 12ce6070-a101-410d-a018-0df3633bef0d
 begin
-	hrfw, prfw = hist1d(rml, "R (FWHM)", 40, 0.0, 0.08)
-	hrfwb, prfwb = hist1d(rmlb, "R (FWHM)", 40, 0.0, 0.08)
+	hrfw, prfw = hist1d(rml, "R (FWHM)", 40, 0.0, 0.08; datap=false)
+	hrfwb, prfwb = hist1d(rmlb, "R (FWHM)", 40, 0.0, 0.08; datap=false)
 	plot( prfw, prfwb)
 end
+
+# ╔═╡ d63c1850-a05c-414c-b132-460381bb8767
+plot( prfw, legend=false)
 
 # ╔═╡ 8c87548d-6bbb-4130-adf9-3ef4c2ec91ae
 md"""
@@ -601,8 +664,8 @@ md"""
 
 # ╔═╡ 3d29bc36-530c-4999-b9fe-58bf46a6c712
 begin
-	rml2 = map(x->rfmle(x, ftm="unbin", wpeak=12), nsipms)
-	rmlb2 = map(x->rfmle(x, ftm="bin", wpeak=12), nsipms)
+	rml2 = map(x->rfmle(x, ftm="unbin", wpeak=11), nsipms)
+	rmlb2 = map(x->rfmle(x, ftm="bin", wpeak=11), nsipms)
 	hrfw2, prfw2 = hist1d(rml2, "R (FWHM)", 40, 0.0, 0.08)
 	hrfwb2, prfwb2 = hist1d(rmlb2, "R (FWHM)", 40, 0.0, 0.08)
 	plot(prfw2, prfwb2)
@@ -616,9 +679,9 @@ md"""
 
 # ╔═╡ adfc0a99-656c-4b3c-aec3-e0a2ceb4cbec
 begin
-	rml3 = map(x->rfmle(x, ftm="unbin", wpeak=8), nsipms)
-	rmlb3 = map(x->rfmle(x, ftm="bin", wpeak=8), nsipms)
-	hrfw3, prfw3 = hist1d(rml3, "R (FWHM)", 40, 0.0, 0.08)
+	rml3 = map(x->rfmle(x, ftm="unbin", wpeak=9), nsipms)
+	rmlb3 = map(x->rfmle(x, ftm="bin", wpeak=9), nsipms)
+	hrfw3, prfw3 = hist1d(rml3, "R (FWHM)", 40, 0.0, 0.08, datap=false)
 	hrfwb3, prfwb3 = hist1d(rmlb3, "R (FWHM)", 40, 0.0, 0.08)
 	plot(prfw3, prfwb3)
 end
@@ -628,6 +691,9 @@ md"""
 - Unbinned:  R = $(round(mean(rml3), sigdigits=3)) +- $(round(std(rml3), sigdigits=3))
 - Binned: R = $(round(mean(rmlb3), sigdigits=3)) +- $(round(std(rmlb3), sigdigits=3))
 """
+
+# ╔═╡ da19c1d9-0682-47de-b69c-50a9938fe897
+plot(prfw3, legend=false)
 
 # ╔═╡ e1ce8dd8-e66e-444e-bf04-a8d1378b6d71
 fg
@@ -647,6 +713,7 @@ fg
 # ╠═7690127a-b6ab-4661-aea3-6be93c0f8760
 # ╠═519399b4-8f8c-4fcb-bfe3-4f7d7d67e761
 # ╠═59a1dffb-6902-4cb0-8650-a23498794f49
+# ╠═4271b7ae-62ad-42e9-a298-b7d9cb07bb86
 # ╠═58670f80-1bf2-4af1-a588-42d52f0394fb
 # ╠═f2476981-326f-4f7e-b796-90a9f357ee4a
 # ╠═de099068-fbe4-428a-89d7-6b6119c52fb9
@@ -683,20 +750,35 @@ fg
 # ╠═44eb878c-7c78-42e9-87b1-32d919ae2c3f
 # ╠═61fb8aab-598c-4dd7-9b45-4ade34436d05
 # ╠═e451863b-1c4f-49de-9c6c-7d2f41388d37
+# ╠═7ac98d50-0edd-40c9-94bf-eb4fb8cdf706
+# ╠═a578676e-3daa-46f0-90dd-1699b62d4605
+# ╠═82cd3877-56bb-47ae-b0fd-0f2062cd4386
+# ╠═85760432-a6ed-4823-8e00-4835571ed340
 # ╠═60101f34-d408-4b6e-9813-33edafcdabcf
 # ╠═95afa3bc-7cbc-4f93-bc31-5829a96037f2
+# ╠═10184c1e-601c-4763-98b7-73a42f64e7e5
+# ╠═5fc2c3b0-3cdf-4bdd-9f83-408a68a78f97
+# ╠═5fbae887-ff4f-4aa0-823e-f1284cc5d0b2
 # ╠═5b05ebab-e416-4550-8dcb-a8a3fcf41f2f
 # ╠═120a9a67-45dc-410f-85cf-2e66f679b276
 # ╠═1004c6bb-07bf-4334-a0e8-feeb0d94e295
 # ╠═41005dd9-3303-4994-b78f-13580fa90a86
+# ╠═8efc9eb5-603e-4799-92f0-46a30de30dc3
 # ╠═b5a5a985-1111-43f9-8cce-5cd68531c735
 # ╠═12ce6070-a101-410d-a018-0df3633bef0d
+# ╠═d63c1850-a05c-414c-b132-460381bb8767
 # ╠═8c87548d-6bbb-4130-adf9-3ef4c2ec91ae
 # ╠═3d29bc36-530c-4999-b9fe-58bf46a6c712
 # ╠═632a6398-8213-45c1-8c29-fa419e1c1739
 # ╠═adfc0a99-656c-4b3c-aec3-e0a2ceb4cbec
 # ╠═36d29dd1-7df7-457f-97a4-70db9e707c3b
+# ╠═da19c1d9-0682-47de-b69c-50a9938fe897
+# ╠═a49f93d5-5106-48ac-8107-4f579374b85d
+# ╠═26db5f86-93ac-440a-b6d5-cce090f4866c
+# ╠═d3a19c59-602f-4e26-9a19-a0b8ebb2584b
+# ╠═2f125bdc-c551-49d3-959f-cc539be6d69c
 # ╠═c0816fb9-00c7-41c4-b2e4-da4dc50fdbd1
+# ╠═3dbe8495-cee9-4d1a-8a9a-4003db5e9149
 # ╠═9294ca23-4a6a-465e-a840-5edc04dbe2eb
 # ╠═88aab6f6-07a8-42c4-b39f-33ed7bb0a75b
 # ╠═ee8468ab-2987-497c-83ac-720902561490
