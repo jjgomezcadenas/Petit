@@ -44,6 +44,7 @@ begin
 	#using Clustering
 	using HDF5
 	using Roots
+	using BayesHistogram
 	import Glob
 end
 
@@ -257,6 +258,19 @@ begin
 	#hspsc2, pspsc2 = hist1d(Float64.(spmdf.sum_charge2), "sum charge plane 2", 50, 100., 600.0)
 	plot(pspmc2)
 end
+
+# ╔═╡ 9f196192-2c9a-4b03-94b3-2c328b37538b
+begin
+	bl = bayesian_blocks(Float64.(spmdf.max_charge2))
+# plot using "to_pdf"
+	support, density = to_pdf(bl)
+	plot(support, density)
+# or using "edges" parameter and an histogramming procedure
+#
+end
+
+# ╔═╡ f4c6b0f7-6ff0-4e77-93c6-f9e8051fe7da
+histogram(Float64.(spmdf.max_charge2), bins=bl.edges, normalize = :pdf)
 
 # ╔═╡ 768d7845-a601-46e4-a86c-09d98d35f715
 begin
@@ -717,6 +731,8 @@ fg
 # ╠═58670f80-1bf2-4af1-a588-42d52f0394fb
 # ╠═f2476981-326f-4f7e-b796-90a9f357ee4a
 # ╠═de099068-fbe4-428a-89d7-6b6119c52fb9
+# ╠═9f196192-2c9a-4b03-94b3-2c328b37538b
+# ╠═f4c6b0f7-6ff0-4e77-93c6-f9e8051fe7da
 # ╠═bd496019-51e2-46ee-96e7-048bf53dc547
 # ╠═99eb99db-56f7-4884-bb1a-ca362fee1ba0
 # ╠═a88457ad-0f1c-4ca8-babf-5eaf3f040de7
