@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.25
+# v0.19.40
 
 using Markdown
 using InteractiveUtils
@@ -13,9 +13,6 @@ macro bind(def, element)
         el
     end
 end
-
-# ╔═╡ d1d74a85-8c66-41c2-9bf0-1d2dc18945de
-using Pkg; Pkg.activate(ENV["JPetit"])
 
 # ╔═╡ 349825ff-7ffe-4fa1-ba26-a772041f0323
 begin
@@ -55,25 +52,53 @@ end
 PlutoUI.TableOfContents(title="FBPET analysis", indent=true)
 
 
+# ╔═╡ 871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
+begin
+	cmdir=joinpath(ENV["DATA"], "tbpet")
+	pdir =joinpath(ENV["PROJECTS"], "Petit")
+end
+
+# ╔═╡ d1d74a85-8c66-41c2-9bf0-1d2dc18945de
+using Pkg; Pkg.activate(pdir)
+
 # ╔═╡ 6c59aeae-7990-4b43-8378-0de210a3291a
 md"""
 # Read the Data Frame and fix the data 
 """
-
-# ╔═╡ 871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
-cmdir="/Users/jjgomezcadenas/Data"
 
 # ╔═╡ 5caa7c21-82e5-420b-b4e7-a0e33543b74b
 md"Read the DF? $(@bind readdf CheckBox(default=true))"
 
 # ╔═╡ 4c9a0060-3a5d-40ec-aefd-c08a88c77cbe
 md""" 
-select number of events for analysis: $(@bind ndf NumberField(10000:1000000, default=10000))"""
+select number of events for analysis: $(@bind ndf NumberField(10000:1000000, default=1000000))"""
 
 # ╔═╡ 587699d9-93d3-42dd-8bf7-3eb3db3b18e0
 md"""
 # Detector
 """
+
+# ╔═╡ 9b5de646-8a90-4069-894e-088cffb011eb
+function set_energy_window(sdata; fwhm_cut=0.05)
+	if occursin("CsI", sdata)
+		scanner ="CsI"
+		fwhm = 0.05
+		sigma = (fwhm/2.3) * 511
+	else
+		scanner="LYSO"
+		fwhm = 0.15
+		sigma = (fwhm/2.3) * 511
+	end
+	cut_energy = fwhm_cut * 511
+	window_energy = 511 - cut_energy
+
+	return scanner, sigma, window_energy
+end
+
+
+
+# ╔═╡ 358a7ff1-1114-4870-8c39-9947572f34b5
+0.15/2.3 * 511
 
 # ╔═╡ f77578be-5f37-4223-b47c-bc6c030a4238
 md"""
@@ -88,7 +113,7 @@ md"""
 
 # ╔═╡ c83ce131-901f-451e-923f-18fc0f0386d4
 md""" 
-select transverse side of the boxes (in mm): $(@bind xyb NumberField(3.0:15.0, default=3.0))"""
+select transverse side of the boxes (in mm): $(@bind xyb NumberField(3.0:15.0, default=6.0))"""
 
 # ╔═╡ d77923e2-662d-4bae-871b-4b7504136a94
 md"""
@@ -124,7 +149,6 @@ md"""
 md"""
 ## Select events with at least one gamma per hemisphere
 
-- The condition that trackid has a unique length of 2 reflects that track_id identifies the track number (1 or 2), and also, by definition the hemisphere. Thus a possible sequence is [1,1,1,2], which implies that track1 interacted four times and 2 only one, but the unique series is [1,2] and thus the length is 2 unless there is only one hemisphere, in which case the length of the unique series is 1
 """
 
 # ╔═╡ 8f86481d-e9de-4f06-b097-980a5afd5e6b
@@ -181,7 +205,7 @@ md"""
 
 # ╔═╡ da30c24f-d28c-4320-be8d-feed2361317c
 md"""
-- The next step is to treat the events in which there are more than one gamma in the box (they are duplicated and need to be cleaned up). It is only woth to consider nb=1 to 4
+- The next step is to treat the events in which there are more than one gamma in the box (they are duplicated and need to be cleaned up). It is only worth to consider nb=1 to 4
 """
 
 # ╔═╡ a80f174a-401b-45b1-bf0a-a7ce050c8ced
@@ -230,9 +254,6 @@ a, b, c, d, e...
 # ╔═╡ c3d8cf4c-9d71-4e52-bc63-f6d89f0e9622
 
 
-# ╔═╡ 28a6e468-ad55-4790-8af5-dd338c65d3af
-
-
 # ╔═╡ 1b4c91c9-d0dc-4f62-951d-2c431c1d71e8
 md"""
 - Finally we concat all the dataframes and drop nb and edep
@@ -241,11 +262,12 @@ md"""
 # ╔═╡ b3b132fa-af07-4c6a-aefd-5baa3bd8884d
 md"""
 ## Energy cut
+Energy cut is fixed from CsI resolution (fixed amount of MS)
 """
 
 # ╔═╡ cad85aa0-0c94-4d94-974f-ad1f86ecfbe8
-md""" 
-Select energy cut: $(@bind ecut NumberField(300.0:450.0, default=350.0))"""
+#md""" 
+#Select energy cut: $(@bind ecut NumberField(300.0:450.0, default=350.0))"""
 
 # ╔═╡ abb82d8c-30bd-47d7-898f-ff09b8a4362b
 md"""
@@ -307,21 +329,16 @@ end
 
 # ╔═╡ ae89f5dc-e958-496a-91ac-0bd977355563
 let
+	let
 	readdir(cmdir)
 	dirs = getdirs(cmdir)
 	md""" Select set  : $(@bind sdata Select(dirs))"""
 end
-
-# ╔═╡ 9527f976-5e7f-413f-a474-a45320259d5e
-begin
-	ddir    = joinpath(cmdir, sdata)
-	dfiles = getdirs(ddir)
-	md""" Select data  : $(@bind xdata Select(dfiles))"""
 end
 
 # ╔═╡ 4af9a3ef-e883-4bc3-a2f1-212102e4951b
 begin
-	xfile    = joinpath(cmdir, sdata, xdata)
+	xfile    = joinpath(cmdir, sdata)
 end
 
 # ╔═╡ 37a23226-4e3c-4e21-a4ee-a9aef75b2093
@@ -526,6 +543,15 @@ dfb1 = @subset dfy :nb .== 1
 # ╔═╡ a2148a73-0647-4c61-8de0-2a80447dc97e
 dfb2 = @subset dfy :nb .== 2
 
+# ╔═╡ 40b0bbf0-b75f-4581-a490-260c35a24dc1
+dfb2
+
+# ╔═╡ 2130269d-3173-4b18-8b7e-5665e584792b
+names(dfb2)
+
+# ╔═╡ e4feb23b-3b6c-4967-b961-c037a5cafc1c
+dfb2.Index
+
 # ╔═╡ 3fa015c9-e21f-453d-94c0-e0f5af2312ef
 dfb2f = filter(r -> isodd(r.Index), dfb2)
 
@@ -574,38 +600,8 @@ dffx =@chain dff begin
 	@select!  $(Not(:edep))
 end
 
-# ╔═╡ 3e850fa3-b9f8-4e8d-971d-42ea820b824b
-dfec = @subset dffx :ebox .> ecut
-
-# ╔═╡ 4d765fbc-139a-4abb-994a-29a2e6e0d31d
-begin
-	dfec2 = combine(groupby(dfec, :event_id)) do sdf
-    n2 = length(unique(sdf.track_id)) 
-  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
-		                              process_id =sdf.process_id,
-		                              track_id =sdf.track_id,
-		                              zb =sdf.zb,
-		                              iz = sdf.iz,
-		                              phib= sdf.phib, 
-		                              iphi = sdf.iphi,
-		                              rbox = sdf.rbox,
-		                              ebox=sdf.ebox,
-									  t =sdf.t) 
-	end
-end
-
-# ╔═╡ f22e8a10-75db-4512-b923-cf65e6988d93
-ngdf = combine(groupby(dfec2, :event_id)) do sdf
-	combine(groupby(sdf, :track_id)) do tdf
-		ng = nrow(tdf)
-	end
-end
-
-# ╔═╡ 802e8e17-6ffd-422b-975f-21d52d7287af
-begin
-	ng_range = range(0,10., length=20)
-	histogram(ngdf.x1, label="ng", bins=ng_range, color=:gray)
-end
+# ╔═╡ e97f22f0-2f00-47d4-be4c-482a976d7441
+length(dffx.ebox)
 
 # ╔═╡ cde0a154-9a93-4b3a-bcae-b6fff44c0e5d
 begin
@@ -631,14 +627,80 @@ histogram(dfb4f.ebox, label="Ebox", bins=es_range, color=:gray)
 # ╔═╡ 59226b94-f112-4840-be05-8c72493423ba
 histogram(dffx.ebox, label="Ebox", bins=es_range, legend=:topleft, color=:gray)
 
-# ╔═╡ 6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
-histogram(dfec.ebox, label="Ebox", bins=es_range, legend=:topleft, color=:gray)
-
-# ╔═╡ 5602db59-3161-436b-bfcc-64aa7b9fb05e
-histogram(dfec2.ebox, label="Ebox", bins=es_range, legend=:topleft, color=:gray)
+# ╔═╡ 001c0e39-a6a9-44a2-ba9b-8666432c7cac
+histogram(dffx.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
 
 # ╔═╡ beb6e5ca-67c9-406e-81b1-770dceff69ab
 zindx([zmin,zmax])
+
+# ╔═╡ 3eddf3c6-8bf4-45f3-b523-3e3b307e1344
+
+scanner, sigma, window_energy = set_energy_window(sdata, fwhm_cut=0.05)
+
+# ╔═╡ 14b3e845-9d71-4bdf-9364-315201f1e4ea
+md"""
+- scanner = $scanner
+- sigma = $sigma
+- energy window (left) = $window_energy
+- To compare LYSO with CsI, we set in both case the same energy window (which in turn selects the same amount of multiple-scattering). Since CsI has better energy resolution than LYSO this will translate and worse efficiency for LYSO (for the same amount of MS)
+- A more precise way to do it (second interaction) is to cut each detector on its own energy window and anlyze the effect on MS in image reconstruction. 
+"""
+
+
+# ╔═╡ 40e95653-8a13-431b-95df-041abf822675
+md"""
+## Smear energy 
+Now smear energy by sigma=$sigma keV to take into account energy resolution
+"""
+
+# ╔═╡ 605f3ef1-3682-4227-9582-7352f1841460
+noise = rand(Normal(0, sigma), length(dffx.ebox))
+
+# ╔═╡ 73332825-f2f6-4cd2-9d81-e3af6729075f
+dffx[!, "energy"] = dffx.ebox .+ noise
+
+# ╔═╡ f4fea8f7-0643-476f-9918-b89998ab0b93
+ecut = window_energy
+
+# ╔═╡ 3e850fa3-b9f8-4e8d-971d-42ea820b824b
+dfec = @subset dffx :energy .> ecut
+
+# ╔═╡ 6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
+histogram(dfec.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
+
+# ╔═╡ 4d765fbc-139a-4abb-994a-29a2e6e0d31d
+begin
+	dfec2 = combine(groupby(dfec, :event_id)) do sdf
+    n2 = length(unique(sdf.track_id)) 
+  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
+		                              process_id =sdf.process_id,
+		                              track_id =sdf.track_id,
+		                              zb =sdf.zb,
+		                              iz = sdf.iz,
+		                              phib= sdf.phib, 
+		                              iphi = sdf.iphi,
+		                              rbox = sdf.rbox,
+		                              ebox=sdf.ebox,
+		                              energy=sdf.energy,
+									  t =sdf.t) 
+	end
+end
+
+# ╔═╡ 5602db59-3161-436b-bfcc-64aa7b9fb05e
+histogram(dfec2.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
+
+# ╔═╡ f22e8a10-75db-4512-b923-cf65e6988d93
+ngdf = combine(groupby(dfec2, :event_id)) do sdf
+	combine(groupby(sdf, :track_id)) do tdf
+		ng = nrow(tdf)
+	end
+end
+
+# ╔═╡ 802e8e17-6ffd-422b-975f-21d52d7287af
+begin
+	ng_range = range(0,10., length=20)
+	histogram(ngdf.x1, label="ng", bins=ng_range, color=:gray)
+end
 
 # ╔═╡ cd3cc0bd-b5f8-402a-9ffd-9d4e9b032d06
 function select_gammas(df, nevt)
@@ -710,18 +772,21 @@ function select_gammas(df, nevt)
 
 # ╔═╡ Cell order:
 # ╠═04b446d6-f34f-11ed-2565-0b15d65b6781
+# ╠═871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
 # ╠═d1d74a85-8c66-41c2-9bf0-1d2dc18945de
 # ╠═349825ff-7ffe-4fa1-ba26-a772041f0323
 # ╠═6c59aeae-7990-4b43-8378-0de210a3291a
-# ╠═871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
 # ╠═ae89f5dc-e958-496a-91ac-0bd977355563
-# ╠═9527f976-5e7f-413f-a474-a45320259d5e
 # ╠═4af9a3ef-e883-4bc3-a2f1-212102e4951b
 # ╠═5caa7c21-82e5-420b-b4e7-a0e33543b74b
 # ╠═37a23226-4e3c-4e21-a4ee-a9aef75b2093
 # ╠═4c9a0060-3a5d-40ec-aefd-c08a88c77cbe
 # ╠═99b43220-0ce1-41e2-a1f5-447387c51bdf
 # ╠═587699d9-93d3-42dd-8bf7-3eb3db3b18e0
+# ╠═9b5de646-8a90-4069-894e-088cffb011eb
+# ╠═358a7ff1-1114-4870-8c39-9947572f34b5
+# ╠═3eddf3c6-8bf4-45f3-b523-3e3b307e1344
+# ╠═14b3e845-9d71-4bdf-9364-315201f1e4ea
 # ╠═f77578be-5f37-4223-b47c-bc6c030a4238
 # ╠═78648d07-cddc-4276-afa5-6d58b9cbc48e
 # ╠═53c37edd-2cef-4743-9d9e-21e5518ddfeb
@@ -774,7 +839,10 @@ function select_gammas(df, nevt)
 # ╠═6366a088-d40f-4897-8887-c6dd8ee333bd
 # ╠═70be139b-e14f-4a67-a33e-52412915688e
 # ╠═81e5e3d3-97f3-4165-ac07-230c2909c99e
+# ╠═40b0bbf0-b75f-4581-a490-260c35a24dc1
+# ╠═2130269d-3173-4b18-8b7e-5665e584792b
 # ╠═9b496757-c3b2-4c09-bbf2-033e228ed344
+# ╠═e4feb23b-3b6c-4967-b961-c037a5cafc1c
 # ╠═3fa015c9-e21f-453d-94c0-e0f5af2312ef
 # ╠═477aecc3-b21e-454c-bb1f-f34c828455bf
 # ╠═c7d29501-b78d-45bd-a572-528c65f05353
@@ -786,13 +854,18 @@ function select_gammas(df, nevt)
 # ╠═5a911953-ca2b-422a-8792-6c950d7d2028
 # ╠═e45cd68b-defc-4478-a311-b88dd5713c68
 # ╠═98437a6a-c685-4600-b5a0-9b29be3b462c
-# ╠═28a6e468-ad55-4790-8af5-dd338c65d3af
 # ╠═1b4c91c9-d0dc-4f62-951d-2c431c1d71e8
 # ╠═ec7440d3-0011-4f9f-82b7-9303771d9037
 # ╠═d0b571ce-330c-4aea-8091-4c558eec3dd6
 # ╠═59226b94-f112-4840-be05-8c72493423ba
+# ╠═e97f22f0-2f00-47d4-be4c-482a976d7441
+# ╠═40e95653-8a13-431b-95df-041abf822675
+# ╠═605f3ef1-3682-4227-9582-7352f1841460
+# ╠═73332825-f2f6-4cd2-9d81-e3af6729075f
+# ╠═001c0e39-a6a9-44a2-ba9b-8666432c7cac
 # ╠═b3b132fa-af07-4c6a-aefd-5baa3bd8884d
 # ╠═cad85aa0-0c94-4d94-974f-ad1f86ecfbe8
+# ╠═f4fea8f7-0643-476f-9918-b89998ab0b93
 # ╠═3e850fa3-b9f8-4e8d-971d-42ea820b824b
 # ╠═6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
 # ╠═abb82d8c-30bd-47d7-898f-ff09b8a4362b
