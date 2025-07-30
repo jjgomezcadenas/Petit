@@ -1,17 +1,19 @@
 ### A Pluto.jl notebook ###
-# v0.19.40
+# v0.20.8
 
 using Markdown
 using InteractiveUtils
 
 # This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
 macro bind(def, element)
-    quote
+    #! format: off
+    return quote
         local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
         local el = $(esc(element))
         global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
         el
     end
+    #! format: on
 end
 
 # ╔═╡ 349825ff-7ffe-4fa1-ba26-a772041f0323
@@ -113,7 +115,7 @@ md"""
 
 # ╔═╡ c83ce131-901f-451e-923f-18fc0f0386d4
 md""" 
-select transverse side of the boxes (in mm): $(@bind xyb NumberField(3.0:15.0, default=6.0))"""
+select transverse side of the boxes (in mm): $(@bind xyb NumberField(3.0:55.0, default=6.0))"""
 
 # ╔═╡ d77923e2-662d-4bae-871b-4b7504136a94
 md"""
@@ -138,6 +140,12 @@ md"""
 - Add box index to DF
 """
 
+# ╔═╡ 76e89264-4b4b-4df2-a290-813294b091e8
+dfs2 = @chain dfs begin 
+    transform(_, [:z]  => zindx => :iz)
+	transform(_, [:phi]  => phidx => :iphi)
+end
+
 # ╔═╡ 8c35d719-c918-4b1d-b005-b914b6dfc177
 md"""
 # Selection
@@ -154,10 +162,30 @@ md"""
 # ╔═╡ 8f86481d-e9de-4f06-b097-980a5afd5e6b
 md"Operate on the DF? $(@bind seltrk CheckBox(default=true))"
 
+# ╔═╡ b0273b4a-7339-4021-b58c-10cbac518baa
+if seltrk
+	dfc2 = combine(groupby(dfs2, :event_id)) do sdf
+    n2 = length(unique(sdf.track_id)) 
+  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
+		                              process_id =sdf.process_id,
+		                              track_id =sdf.track_id,
+		                              z =sdf.z,
+		                              iz = sdf.iz,
+		                              phi= sdf.phi, 
+		                              iphi = sdf.iphi,
+		                              rho = sdf.rho,
+		                              edep=sdf.edep,
+									  t =sdf.t) 
+	end
+end
+
 # ╔═╡ d2d18193-5d9a-4bae-8174-6aaaac733bbf
 md"""
 - The next transformation is needed to prepare the calculation of the R barycenter in the case that there are more than one gamma in a given box. 
 """
+
+# ╔═╡ bd766b2d-0c43-4a5a-ab26-765bfdbe7540
+dfc = transform(dfc2, [:rho, :edep] => (.*) => :rhodep)
 
 # ╔═╡ f638568e-4d84-429b-af03-6b57fec70af5
 #@transform dfc begin
@@ -177,6 +205,27 @@ md"""
 # ╔═╡ babc3f53-0308-4b86-a3ce-d0cc4ebf7136
 md"Operate on the DF? $(@bind selzphi CheckBox(default=true))"
 
+# ╔═╡ 3839fe4a-dc59-4725-bf5f-64157319d267
+if selzphi
+	dfbx = combine(groupby(dfc, :event_id)) do sdf
+			combine(groupby(sdf, [:iphi, :iz])) do zpdf
+				nb = nrow(zpdf) 
+				ebox = sum(zpdf.edep)
+				rbox = sum(zpdf.rhodep) / ebox
+				DataFrame(event_id = zpdf.event_id, 
+		                              track_id =zpdf.track_id,
+		                              process_id =zpdf.process_id,
+									  t =zpdf.t,
+		                              z =zpdf.z, iz = zpdf.iz,
+		                              phi= zpdf.phi, iphi = zpdf.iphi,
+		    						  rho = zpdf.rho,
+	                                  edep=zpdf.edep,
+				ebox = ebox, rbox=rbox, nb=nb)
+           end
+		 
+		end
+end
+
 # ╔═╡ 98d241e1-5695-4f31-b274-8081777b877d
 md"""
 - The next step is to obtain z and phi (zb, phib) from the indexes (iz, iphi) 
@@ -188,15 +237,52 @@ md"""
 #	transform!(dfb, [:iphi]  => idxph => :phib)
 #end
 
+# ╔═╡ 5ff0ae52-26f2-4c10-9c5a-ee2ff39ca60f
+dfb = @chain dfbx begin 
+    transform(_, [:iz]  => idxz => :zb)
+	transform(_, [:iphi]  => idxph => :phib)
+end
+
 # ╔═╡ 4bd8ca38-e337-41f9-bd70-0a41d9a707b3
 md"""
 - Histograms show that box position is centered around true values
 """
 
+# ╔═╡ 57c38187-18ad-4598-9aab-dbb42a44a2c7
+begin
+	phi_range = range(-0.01, 0.01, length=20)
+	histogram(dfb.phi - dfb.phib, label="phi - phi box", bins=phi_range, color=:gray)
+end
+
+# ╔═╡ 70b6b320-7a1b-46f9-ad67-846c282f5fbd
+begin
+	z_range = range(-5, 5.0, length=20)
+	histogram(dfb.z - dfb.zb, label="z - z box", bins=z_range, color=:gray)
+end
+
+# ╔═╡ feb2a48f-8f0c-4785-907c-a8e1fa7876ac
+begin
+	r_range = range(-2.0, 2.0, length=20)
+	histogram(dfb.rho - dfb.rbox, label="r - r box", bins=r_range, color=:gray)
+end
+
 # ╔═╡ ef2c6236-1033-46f9-b0b1-dfd6e4f3b4a0
 md"""
 - We can now drop phi, z and rho, keeping the "smeared values" of zb, phib and rbos
 """
+
+# ╔═╡ 7012f684-5bfd-44fd-9630-40a74a27d325
+dfx =@chain dfb begin
+		@select  $(Not(:z)) 
+		@select  $(Not(:phi)) 
+		@select  $(Not(:rho))
+	end
+
+# ╔═╡ d085bbcc-7ca6-48b2-aa4e-7502044db28c
+begin
+	nb_range = range(0, 10, length=20)
+	histogram(dfx.nb, label="nb", bins=nb_range, color=:gray)
+end
 
 # ╔═╡ cbc7a410-87fa-477b-aae5-61348df055d7
 md"""
@@ -208,30 +294,73 @@ md"""
 - The next step is to treat the events in which there are more than one gamma in the box (they are duplicated and need to be cleaned up). It is only worth to consider nb=1 to 4
 """
 
+# ╔═╡ c7ddda3a-ec97-4c87-9f04-6346879485e3
+dfy = @subset dfx :nb .< 5
+
 # ╔═╡ a80f174a-401b-45b1-bf0a-a7ce050c8ced
 md"""
 - In the case of nb =1 there is nothing to do. We can histogram the difference between edep and ebox and show that both of them are identical. 
 """
+
+# ╔═╡ d3654b89-6af0-43a1-a515-b2919d9d7c65
+dfb1 = @subset dfy :nb .== 1
+
+# ╔═╡ cde0a154-9a93-4b3a-bcae-b6fff44c0e5d
+begin
+	e_range = range(-5.0, 5.0, length=20)
+	histogram(dfb.edep - dfb.ebox, label="E - E box", bins=e_range, color=:gray)
+end
 
 # ╔═╡ e4dd52bc-dfa8-4bc8-b53a-db8f15e5afe4
 md"""
 - And we can histogram the energy spectrum
 """
 
+# ╔═╡ 700eeea5-9632-4e77-87e4-8c20f9dec2d6
+begin
+	es_range = range(0.0, 550., length=50)
+	histogram(dfb.ebox, label="Ebox", bins=es_range, color=:gray)
+end
+
 # ╔═╡ 7a896f17-cf80-4214-97e6-feb91e3df79d
 md"""
 - We consider also the cases with 2, 3 and 4 photons
 """
+
+# ╔═╡ a2148a73-0647-4c61-8de0-2a80447dc97e
+dfb2 = @subset dfy :nb .== 2
+
+# ╔═╡ 1d68a5c7-b87f-4ee4-bb40-37ef6d19718a
+dfb3 = @subset dfy :nb .== 3
+
+# ╔═╡ 6366a088-d40f-4897-8887-c6dd8ee333bd
+dfb4 = @subset dfy :nb .== 4
 
 # ╔═╡ 70be139b-e14f-4a67-a33e-52412915688e
 md"""
 - We add an index to the dataframes
 """
 
+# ╔═╡ 81e5e3d3-97f3-4165-ac07-230c2909c99e
+begin
+	dfb2[!,"Index"] = 1:size(dfb2)[1]
+	dfb3[!,"Index"] = 1:size(dfb3)[1]
+	dfb4[!,"Index"] = 1:size(dfb4)[1]
+	dfb2z = dfb2
+	dfb3z = dfb3
+	dfb4z = dfb4
+end
+
 # ╔═╡ 9b496757-c3b2-4c09-bbf2-033e228ed344
 md"""
 - when nb = 2 we have duplicated rows, so we can drop the even rows
 """
+
+# ╔═╡ 3fa015c9-e21f-453d-94c0-e0f5af2312ef
+dfb2f = filter(r -> isodd(r.Index), dfb2z)
+
+# ╔═╡ 477aecc3-b21e-454c-bb1f-f34c828455bf
+histogram(dfb2f.ebox, label="Ebox", bins=es_range, color=:gray)
 
 # ╔═╡ c7d29501-b78d-45bd-a572-528c65f05353
 md"""
@@ -251,13 +380,58 @@ a, a, b, c, c, d, e, e
 a, b, c, d, e...
 """
 
-# ╔═╡ c3d8cf4c-9d71-4e52-bc63-f6d89f0e9622
+# ╔═╡ 7be15005-cf88-4c92-a967-426d87a3d0d5
+#dfb3x = filter(r -> isodd(r.Index), dfb3z)
 
+# ╔═╡ 90addf2e-a7c0-4324-8b36-db16e86a5a49
+#dfb3x[!,"Index"] = 1:size(dfb3x)[1]
+
+# ╔═╡ 4bb732f5-5e09-4b3d-9ff8-fd9d611d6b77
+#dfb3f = filter(r -> iseven(r.Index), dfb3z)
+
+# ╔═╡ 30389e7d-aa0f-45cd-8424-7f7662518091
+#histogram(dfb3f.ebox, label="Ebox", bins=es_range, color=:gray)
+
+# ╔═╡ 5a911953-ca2b-422a-8792-6c950d7d2028
+begin
+	#dfb4x = filter(r -> isodd(r.Index), dfb4)
+	#dfb4x[!,"Index"] = 1:size(dfb4x)[1]
+	#dfb4f = filter(r -> iseven(r.Index), dfb4z)
+end
+
+# ╔═╡ e45cd68b-defc-4478-a311-b88dd5713c68
+#histogram(dfb4f.ebox, label="Ebox", bins=es_range, color=:gray)
+
+# ╔═╡ 98437a6a-c685-4600-b5a0-9b29be3b462c
+begin
+	dfb2fx = @select dfb2f  $(Not(:Index))
+	#dfb3fx = @select dfb3f  $(Not(:Index))
+	#dfb4fx = @select dfb4f  $(Not(:Index))
+end
 
 # ╔═╡ 1b4c91c9-d0dc-4f62-951d-2c431c1d71e8
 md"""
 - Finally we concat all the dataframes and drop nb and edep
 """
+
+# ╔═╡ ec7440d3-0011-4f9f-82b7-9303771d9037
+#dff = reduce(vcat, [dfb1,dfb2fx,dfb3fx,dfb4fx]) 
+dff = reduce(vcat, [dfb1,dfb2fx]) 
+
+# ╔═╡ d0b571ce-330c-4aea-8091-4c558eec3dd6
+dffx =@chain dff begin
+	@select  $(Not(:nb))
+	@select!  $(Not(:edep))
+end
+
+# ╔═╡ 59226b94-f112-4840-be05-8c72493423ba
+histogram(dffx.ebox, label="Ebox", bins=es_range, legend=:topleft, color=:gray)
+
+# ╔═╡ e97f22f0-2f00-47d4-be4c-482a976d7441
+length(dffx.ebox)
+
+# ╔═╡ 001c0e39-a6a9-44a2-ba9b-8666432c7cac
+histogram(dffx.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
 
 # ╔═╡ b3b132fa-af07-4c6a-aefd-5baa3bd8884d
 md"""
@@ -269,10 +443,53 @@ Energy cut is fixed from CsI resolution (fixed amount of MS)
 #md""" 
 #Select energy cut: $(@bind ecut NumberField(300.0:450.0, default=350.0))"""
 
+# ╔═╡ 3e850fa3-b9f8-4e8d-971d-42ea820b824b
+dfec = @subset dffx :energy .> ecut
+
+# ╔═╡ 6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
+histogram(dfec.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
+
+# ╔═╡ 38d152b7-9e38-4f30-9435-932ad61939e8
+nrow(dfec)
+
 # ╔═╡ abb82d8c-30bd-47d7-898f-ff09b8a4362b
 md"""
 ## Impose that there is at least one gamma per hemisphere after energy cut
 """
+
+# ╔═╡ 4d765fbc-139a-4abb-994a-29a2e6e0d31d
+begin
+	dfec2 = combine(groupby(dfec, :event_id)) do sdf
+    n2 = length(unique(sdf.track_id)) 
+  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
+		                              process_id =sdf.process_id,
+		                              track_id =sdf.track_id,
+		                              zb =sdf.zb,
+		                              iz = sdf.iz,
+		                              phib= sdf.phib, 
+		                              iphi = sdf.iphi,
+		                              rbox = sdf.rbox,
+		                              ebox=sdf.ebox,
+		                              energy=sdf.energy,
+									  t =sdf.t) 
+	end
+end
+
+# ╔═╡ 5602db59-3161-436b-bfcc-64aa7b9fb05e
+histogram(dfec2.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
+
+# ╔═╡ f22e8a10-75db-4512-b923-cf65e6988d93
+ngdf = combine(groupby(dfec2, :event_id)) do sdf
+	combine(groupby(sdf, :track_id)) do tdf
+		ng = nrow(tdf)
+	end
+end
+
+# ╔═╡ 802e8e17-6ffd-422b-975f-21d52d7287af
+begin
+	ng_range = range(0,10., length=20)
+	histogram(ngdf.x1, label="ng", bins=ng_range, color=:gray)
+end
 
 # ╔═╡ d0f9e26b-2a3c-42a4-a826-7c8694f5d470
 md"""
@@ -377,6 +594,14 @@ end
 # ╔═╡ 99b43220-0ce1-41e2-a1f5-447387c51bdf
 dfs = df[1:ndf, :]
 
+# ╔═╡ 2f78c866-afcd-480f-9bb1-b644a5ee8530
+begin
+	rf1 = round(size(dfc)[1]/size(dfs)[1], sigdigits=2)
+md"""
+- reduction factor imposing two gammas in DF = $(rf1)
+"""
+end
+
 # ╔═╡ 78648d07-cddc-4276-afa5-6d58b9cbc48e
 begin
 	rhomin = round(minimum(df.rho), sigdigits=2)
@@ -442,194 +667,6 @@ phidx([-π,π])
 # ╔═╡ 38d339fe-09ed-488c-8036-945a8a25c577
 idxph([1,734])
 
-# ╔═╡ 76e89264-4b4b-4df2-a290-813294b091e8
-dfs2 = @chain dfs begin 
-    transform(_, [:z]  => zindx => :iz)
-	transform(_, [:phi]  => phidx => :iphi)
-end
-
-# ╔═╡ b0273b4a-7339-4021-b58c-10cbac518baa
-if seltrk
-	dfc2 = combine(groupby(dfs2, :event_id)) do sdf
-    n2 = length(unique(sdf.track_id)) 
-  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
-		                              process_id =sdf.process_id,
-		                              track_id =sdf.track_id,
-		                              z =sdf.z,
-		                              iz = sdf.iz,
-		                              phi= sdf.phi, 
-		                              iphi = sdf.iphi,
-		                              rho = sdf.rho,
-		                              edep=sdf.edep,
-									  t =sdf.t) 
-	end
-end
-
-# ╔═╡ bd766b2d-0c43-4a5a-ab26-765bfdbe7540
-dfc = transform(dfc2, [:rho, :edep] => (.*) => :rhodep)
-
-# ╔═╡ 2f78c866-afcd-480f-9bb1-b644a5ee8530
-begin
-	rf1 = round(size(dfc)[1]/size(dfs)[1], sigdigits=2)
-md"""
-- reduction factor imposing two gammas in DF = $(rf1)
-"""
-end
-
-# ╔═╡ 3839fe4a-dc59-4725-bf5f-64157319d267
-if selzphi
-	dfbx = combine(groupby(dfc, :event_id)) do sdf
-			combine(groupby(sdf, [:iphi, :iz])) do zpdf
-				nb = nrow(zpdf) 
-				ebox = sum(zpdf.edep)
-				rbox = sum(zpdf.rhodep) / ebox
-				DataFrame(event_id = zpdf.event_id, 
-		                              track_id =zpdf.track_id,
-		                              process_id =zpdf.process_id,
-									  t =zpdf.t,
-		                              z =zpdf.z, iz = zpdf.iz,
-		                              phi= zpdf.phi, iphi = zpdf.iphi,
-		    						  rho = zpdf.rho,
-	                                  edep=zpdf.edep,
-				ebox = ebox, rbox=rbox, nb=nb)
-           end
-		 
-		end
-end
-
-# ╔═╡ 5ff0ae52-26f2-4c10-9c5a-ee2ff39ca60f
-dfb = @chain dfbx begin 
-    transform(_, [:iz]  => idxz => :zb)
-	transform(_, [:iphi]  => idxph => :phib)
-end
-
-# ╔═╡ 57c38187-18ad-4598-9aab-dbb42a44a2c7
-begin
-	phi_range = range(-0.01, 0.01, length=20)
-	histogram(dfb.phi - dfb.phib, label="phi - phi box", bins=phi_range, color=:gray)
-end
-
-# ╔═╡ 70b6b320-7a1b-46f9-ad67-846c282f5fbd
-begin
-	z_range = range(-5, 5.0, length=20)
-	histogram(dfb.z - dfb.zb, label="z - z box", bins=z_range, color=:gray)
-end
-
-# ╔═╡ feb2a48f-8f0c-4785-907c-a8e1fa7876ac
-begin
-	r_range = range(-2.0, 2.0, length=20)
-	histogram(dfb.rho - dfb.rbox, label="r - r box", bins=r_range, color=:gray)
-end
-
-# ╔═╡ 7012f684-5bfd-44fd-9630-40a74a27d325
-dfx =@chain dfb begin
-		@select  $(Not(:z)) 
-		@select  $(Not(:phi)) 
-		@select  $(Not(:rho))
-	end
-
-# ╔═╡ d085bbcc-7ca6-48b2-aa4e-7502044db28c
-begin
-	nb_range = range(0, 10, length=20)
-	histogram(dfx.nb, label="nb", bins=nb_range, color=:gray)
-end
-
-# ╔═╡ c7ddda3a-ec97-4c87-9f04-6346879485e3
-dfy = @subset dfx :nb .< 5
-
-# ╔═╡ d3654b89-6af0-43a1-a515-b2919d9d7c65
-dfb1 = @subset dfy :nb .== 1
-
-# ╔═╡ a2148a73-0647-4c61-8de0-2a80447dc97e
-dfb2 = @subset dfy :nb .== 2
-
-# ╔═╡ 40b0bbf0-b75f-4581-a490-260c35a24dc1
-dfb2
-
-# ╔═╡ 2130269d-3173-4b18-8b7e-5665e584792b
-names(dfb2)
-
-# ╔═╡ e4feb23b-3b6c-4967-b961-c037a5cafc1c
-dfb2.Index
-
-# ╔═╡ 3fa015c9-e21f-453d-94c0-e0f5af2312ef
-dfb2f = filter(r -> isodd(r.Index), dfb2)
-
-# ╔═╡ 1d68a5c7-b87f-4ee4-bb40-37ef6d19718a
-dfb3 = @subset dfy :nb .== 3
-
-# ╔═╡ 7be15005-cf88-4c92-a967-426d87a3d0d5
-dfb3x = filter(r -> isodd(r.Index), dfb3)
-
-# ╔═╡ 90addf2e-a7c0-4324-8b36-db16e86a5a49
-dfb3x[!,"Index"] = 1:size(dfb3x)[1]
-
-# ╔═╡ 4bb732f5-5e09-4b3d-9ff8-fd9d611d6b77
-dfb3f = filter(r -> iseven(r.Index), dfb3x)
-
-# ╔═╡ 6366a088-d40f-4897-8887-c6dd8ee333bd
-dfb4 = @subset dfy :nb .== 4
-
-# ╔═╡ 81e5e3d3-97f3-4165-ac07-230c2909c99e
-begin
-	dfb2[!,"Index"] = 1:size(dfb2)[1]
-	dfb3[!,"Index"] = 1:size(dfb3)[1]
-	dfb4[!,"Index"] = 1:size(dfb4)[1]
-end
-
-# ╔═╡ 5a911953-ca2b-422a-8792-6c950d7d2028
-begin
-	dfb4x = filter(r -> isodd(r.Index), dfb4)
-	dfb4x[!,"Index"] = 1:size(dfb4x)[1]
-	dfb4f = filter(r -> iseven(r.Index), dfb4x)
-end
-
-# ╔═╡ 98437a6a-c685-4600-b5a0-9b29be3b462c
-begin
-	dfb2fx = @select dfb2f  $(Not(:Index))
-	dfb3fx = @select dfb3f  $(Not(:Index))
-	dfb4fx = @select dfb4f  $(Not(:Index))
-end
-
-# ╔═╡ ec7440d3-0011-4f9f-82b7-9303771d9037
-dff = reduce(vcat, [dfb1,dfb2fx,dfb3fx,dfb4fx]) 
-
-# ╔═╡ d0b571ce-330c-4aea-8091-4c558eec3dd6
-dffx =@chain dff begin
-	@select  $(Not(:nb))
-	@select!  $(Not(:edep))
-end
-
-# ╔═╡ e97f22f0-2f00-47d4-be4c-482a976d7441
-length(dffx.ebox)
-
-# ╔═╡ cde0a154-9a93-4b3a-bcae-b6fff44c0e5d
-begin
-	e_range = range(-5.0, 5.0, length=20)
-	histogram(dfb.edep - dfb.ebox, label="E - E box", bins=e_range, color=:gray)
-end
-
-# ╔═╡ 700eeea5-9632-4e77-87e4-8c20f9dec2d6
-begin
-	es_range = range(0.0, 550., length=50)
-	histogram(dfb.ebox, label="Ebox", bins=es_range, color=:gray)
-end
-
-# ╔═╡ 477aecc3-b21e-454c-bb1f-f34c828455bf
-histogram(dfb2f.ebox, label="Ebox", bins=es_range, color=:gray)
-
-# ╔═╡ 30389e7d-aa0f-45cd-8424-7f7662518091
-histogram(dfb3f.ebox, label="Ebox", bins=es_range, color=:gray)
-
-# ╔═╡ e45cd68b-defc-4478-a311-b88dd5713c68
-histogram(dfb4f.ebox, label="Ebox", bins=es_range, color=:gray)
-
-# ╔═╡ 59226b94-f112-4840-be05-8c72493423ba
-histogram(dffx.ebox, label="Ebox", bins=es_range, legend=:topleft, color=:gray)
-
-# ╔═╡ 001c0e39-a6a9-44a2-ba9b-8666432c7cac
-histogram(dffx.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
-
 # ╔═╡ beb6e5ca-67c9-406e-81b1-770dceff69ab
 zindx([zmin,zmax])
 
@@ -661,46 +698,6 @@ dffx[!, "energy"] = dffx.ebox .+ noise
 
 # ╔═╡ f4fea8f7-0643-476f-9918-b89998ab0b93
 ecut = window_energy
-
-# ╔═╡ 3e850fa3-b9f8-4e8d-971d-42ea820b824b
-dfec = @subset dffx :energy .> ecut
-
-# ╔═╡ 6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
-histogram(dfec.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
-
-# ╔═╡ 4d765fbc-139a-4abb-994a-29a2e6e0d31d
-begin
-	dfec2 = combine(groupby(dfec, :event_id)) do sdf
-    n2 = length(unique(sdf.track_id)) 
-  	n2 != 2 ? DataFrame() : DataFrame(event_id = sdf.event_id,
-		                              process_id =sdf.process_id,
-		                              track_id =sdf.track_id,
-		                              zb =sdf.zb,
-		                              iz = sdf.iz,
-		                              phib= sdf.phib, 
-		                              iphi = sdf.iphi,
-		                              rbox = sdf.rbox,
-		                              ebox=sdf.ebox,
-		                              energy=sdf.energy,
-									  t =sdf.t) 
-	end
-end
-
-# ╔═╡ 5602db59-3161-436b-bfcc-64aa7b9fb05e
-histogram(dfec2.energy, label="Energy", bins=es_range, legend=:topleft, color=:gray)
-
-# ╔═╡ f22e8a10-75db-4512-b923-cf65e6988d93
-ngdf = combine(groupby(dfec2, :event_id)) do sdf
-	combine(groupby(sdf, :track_id)) do tdf
-		ng = nrow(tdf)
-	end
-end
-
-# ╔═╡ 802e8e17-6ffd-422b-975f-21d52d7287af
-begin
-	ng_range = range(0,10., length=20)
-	histogram(ngdf.x1, label="ng", bins=ng_range, color=:gray)
-end
 
 # ╔═╡ cd3cc0bd-b5f8-402a-9ffd-9d4e9b032d06
 function select_gammas(df, nevt)
@@ -839,16 +836,12 @@ function select_gammas(df, nevt)
 # ╠═6366a088-d40f-4897-8887-c6dd8ee333bd
 # ╠═70be139b-e14f-4a67-a33e-52412915688e
 # ╠═81e5e3d3-97f3-4165-ac07-230c2909c99e
-# ╠═40b0bbf0-b75f-4581-a490-260c35a24dc1
-# ╠═2130269d-3173-4b18-8b7e-5665e584792b
 # ╠═9b496757-c3b2-4c09-bbf2-033e228ed344
-# ╠═e4feb23b-3b6c-4967-b961-c037a5cafc1c
 # ╠═3fa015c9-e21f-453d-94c0-e0f5af2312ef
 # ╠═477aecc3-b21e-454c-bb1f-f34c828455bf
 # ╠═c7d29501-b78d-45bd-a572-528c65f05353
 # ╠═7be15005-cf88-4c92-a967-426d87a3d0d5
 # ╠═90addf2e-a7c0-4324-8b36-db16e86a5a49
-# ╠═c3d8cf4c-9d71-4e52-bc63-f6d89f0e9622
 # ╠═4bb732f5-5e09-4b3d-9ff8-fd9d611d6b77
 # ╠═30389e7d-aa0f-45cd-8424-7f7662518091
 # ╠═5a911953-ca2b-422a-8792-6c950d7d2028
@@ -868,6 +861,7 @@ function select_gammas(df, nevt)
 # ╠═f4fea8f7-0643-476f-9918-b89998ab0b93
 # ╠═3e850fa3-b9f8-4e8d-971d-42ea820b824b
 # ╠═6ef4055d-1eb8-4f6a-9775-49a9a9bf365f
+# ╠═38d152b7-9e38-4f30-9435-932ad61939e8
 # ╠═abb82d8c-30bd-47d7-898f-ff09b8a4362b
 # ╠═4d765fbc-139a-4abb-994a-29a2e6e0d31d
 # ╠═5602db59-3161-436b-bfcc-64aa7b9fb05e
