@@ -16,12 +16,22 @@ struct Tracks
     components::Vector{Vector{Int}}
 end
 
+struct TracksSummary
+    energies::Vector{Float64}
+    xs::Vector{Float64}
+    ys::Vector{Float64}
+    zs::Vector{Float64}
+end
+
+# Constructor for empty TracksSummary
+TracksSummary() = TracksSummary(Float64[], Float64[], Float64[], Float64[])
+
 struct AnalysisResults
-    single_track_energies::Vector{Float64}
-    two_track_primary::Vector{Float64}
-    two_track_secondary::Vector{Float64}
-    three_track_primary::Vector{Float64}
-    three_track_secondary::Vector{Float64}
+    single_track::TracksSummary
+    two_track_primary::TracksSummary
+    two_track_secondary::TracksSummary
+    three_track_primary::TracksSummary
+    three_track_secondary::TracksSummary
     n_events_processed::Int
     n_single_track::Int
     n_two_track::Int
@@ -98,11 +108,11 @@ function analysis_loop(hitsdf::DataFrame;
                       energy_threshold_kev::Float64=1.0)
     
     # Initialize energy arrays with proper types
-    single_track_energies = Float64[]
-    two_track_primary = Float64[]
-    two_track_secondary = Float64[]
-    three_track_primary = Float64[]
-    three_track_secondary = Float64[]
+    single_tracks = TracksSummary()
+    two_track_primary = TracksSummary()
+    two_track_secondary = TracksSummary()
+    three_track_primary = TracksSummary()
+    three_track_secondary = TracksSummary()
     
     # Initialize counters
     n_single_track = 0
@@ -123,23 +133,42 @@ function analysis_loop(hitsdf::DataFrame;
             if length(tracks) == 1
                 # Single track event
                 energy_kev = 1e+3 * sum(tracks[1].voxels.energy)
-                push!(single_track_energies, energy_kev)
+                push!(single_tracks.energies, energy_kev)
+                append!(single_tracks.xs, tracks[1].voxels.x)
+                append!(single_tracks.ys, tracks[1].voxels.y)
+                append!(single_tracks.zs, tracks[1].voxels.z)
+
                 n_single_track += 1
                 
             elseif length(tracks) == 2 
                 # Two track event
                 primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
                 secondary_energy = 1e+3 * sum(tracks[2].voxels.energy)
-                push!(two_track_primary, primary_energy)
-                push!(two_track_secondary, secondary_energy)
+                push!(two_track_primary.energies, primary_energy)
+                append!(two_track_primary.xs, tracks[1].voxels.x)
+                append!(two_track_primary.ys, tracks[1].voxels.y)
+                append!(two_track_primary.zs, tracks[1].voxels.z)
+                push!(two_track_secondary.energies, secondary_energy)
+                append!(two_track_secondary.xs, tracks[2].voxels.x)
+                append!(two_track_secondary.ys, tracks[2].voxels.y)
+                append!(two_track_secondary.zs, tracks[2].voxels.z)
+                
                 n_two_track += 1
                 
             elseif length(tracks) >= 3 
                 # Three or more track event
                 primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
-                secondary_energy = 1e+3 * sum(tracks[2].voxels.energy)
-                push!(three_track_primary, primary_energy)
-                push!(three_track_secondary, secondary_energy)
+                push!(three_track_primary.energies, primary_energy)
+                append!(three_track_primary.xs, tracks[1].voxels.x)
+                append!(three_track_primary.ys, tracks[1].voxels.y)
+                append!(three_track_primary.zs, tracks[1].voxels.z)
+                for n in 2:length(tracks)
+                    secondary_energy = 1e+3 * sum(tracks[n].voxels.energy)
+                    push!(three_track_secondary.energies, secondary_energy)
+                    append!(three_track_secondary.xs, tracks[n].voxels.x)
+                    append!(three_track_secondary.ys, tracks[n].voxels.y)
+                    append!(three_track_secondary.zs, tracks[n].voxels.z)
+                end
                 n_three_plus_track += 1
             end
             
@@ -151,7 +180,7 @@ function analysis_loop(hitsdf::DataFrame;
     end
     
     return AnalysisResults(
-        single_track_energies,
+        single_tracks,
         two_track_primary,
         two_track_secondary,
         three_track_primary,
@@ -162,6 +191,7 @@ function analysis_loop(hitsdf::DataFrame;
         n_three_plus_track,
         n_failed
     )
+
 end
 
 
@@ -489,7 +519,7 @@ function plot_hits(df::DataFrame; nbins::Int=100)
     return plot(p1, p2, p3, p4, layout=(2, 2), size=(1000, 800))
 end
 
-export Tracks, AnalysisResults
+export Tracks, AnalysisResults, TracksSummary
 export get_event, voxelize_hits, euclidean_distance, build_tracks, select_events, analysis_loop
 export voxel_distances, voxel_closest_distance, voxel_energy
 export hits_per_event, hits_per_all_events

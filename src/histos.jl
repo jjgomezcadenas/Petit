@@ -7,7 +7,7 @@ using StatsBase
 import Base.length
 # histograms
 
-export hist1d, hist2d, p1df, step_hist, in_range, get_histo1d
+export hist1d, hist2d, p1df, step_hist, in_range, get_histo1d, Histo1d
 export scan_level, get_vals_from_sparse
 
 include("util.jl")
@@ -29,22 +29,31 @@ get_histo1d(h::Histogram) = Histo1d(edges(h), h.weights, centers(h))
 function hist1d(x::AbstractVector{T}, bins::AbstractVector{T}, norm=false) where {T<:Real} 
     h = fit(Histogram, x, bins)
     if norm
-        h = StatsBase.normalize(h, mode=:density)
+        h = StatsBase.normalize(h, mode=:pdf)
     end
     get_histo1d(h)
 end
 
 
 """Return a Histo1d struct"""
-function hist1d(x::AbstractVector{T}, nbins::Integer, norm=false) where {T<:Real} 
-    h = fit(Histogram, x; nbins=nbins)
+function hist1d(x::AbstractVector{T}; 
+                nbins::Integer=50, 
+                xlim::Union{Nothing, Tuple{Float64, Float64}} = nothing,
+                norm=false) where {T<:Real}
+    
+    edges = isnothing(xlim) ? nothing :
+            collect(range(xlim[1], xlim[2]; length = nbins+1))
+    h = isnothing(edges) ?
+        fit(Histogram, x; nbins=nbins) :
+        fit(Histogram, x, edges)
+    #h = fit(Histogram, x; nbins=nbins)
     if norm
-        h = StatsBase.normalize(h, mode=:density)
+        h = StatsBase.normalize(h, mode=:pdf)
     end
     get_histo1d(h)
 end
 
-    
+
 
 """
     edges(h::Histogram)
@@ -148,7 +157,6 @@ function plot_histogram(h::Histo1d, datap::Bool,
 end
 
 
-
 """
     digitize(x, bins)
 
@@ -161,8 +169,6 @@ end
 function digitize(x::Vector{<:Real}, bins::Vector{<:Real})
     return searchsortedlast.(Ref(bins), x)
 end
-
-
 
 
 """
@@ -184,6 +190,8 @@ function hist2d(x::Vector{T},y::Vector{T}, nbins::Integer,
     mask = select_data.(x, y)
     data = (y[mask], x[mask])
     h    = fit(Histogram, data, nbins=nbins)
+    xe   = h.edges[1]
+    ye   = h.edges[2]
     hm   = heatmap(xe, ye, h.weights)
     xlabel!(xl)
     ylabel!(yl)

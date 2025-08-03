@@ -71,6 +71,9 @@ md"""
 # Read the Data 
 """
 
+# ╔═╡ d0bcc833-a3c9-49f8-9d57-303010584019
+
+
 # ╔═╡ 5caa7c21-82e5-420b-b4e7-a0e33543b74b
 md"Read the DF? $(@bind readdf CheckBox(default=true))"
 
@@ -185,26 +188,34 @@ if run_analysis
 	md"energy threshold (keV) $(@bind energy_threshold_kev NumberField(0.0:1000.0, default=10.0))" 
 end
 
-# ╔═╡ 0c725b8e-93f1-45d2-bc17-abbedcdaeab1
-md"""
-    struct AnalysisResults
-        single_track_energies::Vector{Float64}
-        two_track_primary::Vector{Float64}
-        two_track_secondary::Vector{Float64}
-        three_track_primary::Vector{Float64}
-        three_track_secondary::Vector{Float64}
-        n_events_processed::Int
-        n_single_track::Int
-        n_two_track::Int
-        n_three_plus_track::Int
-        n_failed::Int
+# ╔═╡ 95f6690e-d1f2-4e10-a14a-c46208015d08
+md"Run signal? $(@bind run_signal CheckBox(default=false))"
+
+# ╔═╡ 0c337a9d-30e5-490b-8bc0-c6d52e8bd8e9
+if run_signal
+	rsgn = event_loop(cmdir; input_file= "0nubb.next.h5",
+					   events_to_run=100, 
+				 	   voxel_size_mm=5,
+				 	   max_distance_mm=10, 
+				       energy_threshold_kev=10)
+	
+	HSt1 =  histogram_results(rsgn.single_track)
+	HSt2p = histogram_results(rsgn.two_track_primary)
+	HSt2s = histogram_results(rsgn.two_track_secondary)
+	HSt3p = histogram_results(rsgn.three_track_primary)
+	HSt3s = histogram_results(rsgn.three_track_secondary)
 end
-"""
 
 # ╔═╡ d0f9e26b-2a3c-42a4-a826-7c8694f5d470
 md"""
 # Functions
 """
+
+# ╔═╡ e455cc2c-e64c-4502-9c62-0d017047272e
+
+
+# ╔═╡ ec179267-1bd9-4c1d-a96b-459e7e7e1d70
+
 
 # ╔═╡ 33efdcc5-cc1d-48f4-81af-b5f65bb348f7
 function histogram_stats(hitsdf)
@@ -537,6 +548,7 @@ end
 # ╠═6c59aeae-7990-4b43-8378-0de210a3291a
 # ╠═ae89f5dc-e958-496a-91ac-0bd977355563
 # ╠═4af9a3ef-e883-4bc3-a2f1-212102e4951b
+# ╠═d0bcc833-a3c9-49f8-9d57-303010584019
 # ╠═5caa7c21-82e5-420b-b4e7-a0e33543b74b
 # ╠═37a23226-4e3c-4e21-a4ee-a9aef75b2093
 # ╠═8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
@@ -584,10 +596,13 @@ end
 # ╠═f1b3c4ef-1b0c-4243-be00-1b0a15b6f3a2
 # ╠═b19304c2-600a-42d3-a430-c205f75d8f77
 # ╠═7d65660f-6b52-48e2-afea-0edd4de33faf
-# ╠═0c725b8e-93f1-45d2-bc17-abbedcdaeab1
 # ╠═4d0c3fe4-5e76-441d-87c7-3a840791257c
 # ╠═faa0ee0d-447e-43f8-8ebd-d3e6c3c1df24
+# ╠═95f6690e-d1f2-4e10-a14a-c46208015d08
+# ╠═0c337a9d-30e5-490b-8bc0-c6d52e8bd8e9
 # ╠═d0f9e26b-2a3c-42a4-a826-7c8694f5d470
+# ╠═e455cc2c-e64c-4502-9c62-0d017047272e
+# ╠═ec179267-1bd9-4c1d-a96b-459e7e7e1d70
 # ╠═33efdcc5-cc1d-48f4-81af-b5f65bb348f7
 # ╠═6fc13d23-cb44-40a6-a52d-32b81855d6a0
 # ╠═2d4732eb-47b0-498b-b0ff-c9dcf3951ecd
