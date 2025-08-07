@@ -9,6 +9,8 @@ import Base.length
 
 export hist1d, hist2d, p1df, step_hist, in_range, get_histo1d, Histo1d
 export scan_level, get_vals_from_sparse
+export save_histo1d, load_histo1d
+export save_histos, load_histos
 
 include("util.jl")
 
@@ -325,6 +327,260 @@ function step_hist(data::Vector{<:Real};
     plot!(plt, [en, en], [baseline, hn]; linecolor=:black, lw=1)
 
     return get_histo1d(h), plt
+end
+
+
+"""
+    save_histo1d(h::Histo1d, filename::String)
+
+Save a Histo1d histogram to a text file.
+
+# Arguments
+- `h::Histo1d`: The histogram to save
+- `filename::String`: Path to the output file
+
+# File Format
+The file contains:
+- Line 1: Number of bins
+- Line 2: Edges (space-separated)
+- Line 3: Weights (space-separated)
+- Line 4: Centers (space-separated)
+
+# Example
+```julia
+h = hist1d([1.0, 2.0, 3.0, 4.0, 5.0]; nbins=5)
+save_histo1d(h, "my_histogram.txt")
+```
+"""
+function save_histo1d(h::Histo1d, filename::String)
+    open(filename, "w") do io
+        # Write number of bins
+        println(io, length(h.weights))
+        
+        # Write edges (space-separated)
+        println(io, join(h.edges, " "))
+        
+        # Write weights (space-separated)
+        println(io, join(h.weights, " "))
+        
+        # Write centers (space-separated)
+        println(io, join(h.centers, " "))
+    end
+end
+
+
+"""
+    load_histo1d(filename::String) -> Histo1d
+
+Load a Histo1d histogram from a text file created by save_histo1d.
+
+# Arguments
+- `filename::String`: Path to the input file
+
+# Returns
+- `Histo1d`: The loaded histogram
+
+# Example
+```julia
+h = load_histo1d("my_histogram.txt")
+```
+"""
+function load_histo1d(filename::String)
+    lines = readlines(filename)
+    
+    if length(lines) != 4
+        error("Invalid histogram file format. Expected 4 lines, got $(length(lines))")
+    end
+    
+    # Parse number of bins (not strictly needed but good for validation)
+    n_bins = parse(Int, strip(lines[1]))
+    
+    # Parse edges
+    edges = parse.(Float64, split(strip(lines[2])))
+    
+    # Parse weights
+    weights = parse.(Float64, split(strip(lines[3])))
+    
+    # Parse centers
+    centers = parse.(Float64, split(strip(lines[4])))
+    
+    # Validate dimensions
+    if length(weights) != n_bins
+        error("Mismatch: expected $n_bins weights, got $(length(weights))")
+    end
+    
+    if length(edges) != n_bins + 1
+        error("Mismatch: expected $(n_bins + 1) edges, got $(length(edges))")
+    end
+    
+    if length(centers) != n_bins
+        error("Mismatch: expected $n_bins centers, got $(length(centers))")
+    end
+    
+    return Histo1d(edges, weights, centers)
+end
+
+
+"""
+    save_histos(histos::Dict{String, Histo1d}, filename::String)
+
+Save a collection of named histograms to a single file.
+
+# Arguments
+- `histos::Dict{String, Histo1d}`: Dictionary mapping histogram names to Histo1d objects
+- `filename::String`: Path to the output file
+
+# File Format
+The file contains:
+- Line 1: Number of histograms
+- For each histogram:
+  - Line: Histogram name
+  - Line: Number of bins
+  - Line: Edges (space-separated)
+  - Line: Weights (space-separated)
+  - Line: Centers (space-separated)
+
+# Example
+```julia
+h1 = hist1d([1.0, 2.0, 3.0]; nbins=3)
+h2 = hist1d([4.0, 5.0, 6.0]; nbins=2)
+histos = Dict("energy" => h1, "position" => h2)
+save_histos(histos, "my_histograms.txt")
+```
+"""
+function save_histos(histos::Dict{String, Histo1d}, filename::String)
+    open(filename, "w") do io
+        # Write number of histograms
+        println(io, length(histos))
+        
+        # Write each histogram
+        for (name, h) in histos
+            # Write histogram name
+            println(io, name)
+            
+            # Write number of bins
+            println(io, length(h.weights))
+            
+            # Write edges (space-separated)
+            println(io, join(h.edges, " "))
+            
+            # Write weights (space-separated)
+            println(io, join(h.weights, " "))
+            
+            # Write centers (space-separated)  
+            println(io, join(h.centers, " "))
+        end
+    end
+end
+
+
+"""
+    save_histos(histos::Vector{Histo1d}, names::Vector{String}, filename::String)
+
+Save a collection of histograms with given names to a single file.
+
+# Arguments
+- `histos::Vector{Histo1d}`: Vector of Histo1d objects
+- `names::Vector{String}`: Vector of names for the histograms
+- `filename::String`: Path to the output file
+
+# Example
+```julia
+h1 = hist1d([1.0, 2.0, 3.0]; nbins=3)
+h2 = hist1d([4.0, 5.0, 6.0]; nbins=2)
+save_histos([h1, h2], ["energy", "position"], "my_histograms.txt")
+```
+"""
+function save_histos(histos::Vector{Histo1d}, names::Vector{String}, filename::String)
+    if length(histos) != length(names)
+        error("Number of histograms ($(length(histos))) must match number of names ($(length(names)))")
+    end
+    
+    histo_dict = Dict(name => hist for (name, hist) in zip(names, histos))
+    save_histos(histo_dict, filename)
+end
+
+
+"""
+    load_histos(filename::String) -> Dict{String, Histo1d}
+
+Load a collection of named histograms from a file created by save_histos.
+
+# Arguments
+- `filename::String`: Path to the input file
+
+# Returns
+- `Dict{String, Histo1d}`: Dictionary mapping histogram names to Histo1d objects
+
+# Example
+```julia
+histos = load_histos("my_histograms.txt")
+energy_hist = histos["energy"]
+position_hist = histos["position"]
+```
+"""
+function load_histos(filename::String)
+    lines = readlines(filename)
+    
+    if length(lines) < 1
+        error("Invalid histogram collection file: file is empty")
+    end
+    
+    # Parse number of histograms
+    n_histos = parse(Int, strip(lines[1]))
+    
+    if n_histos == 0
+        return Dict{String, Histo1d}()
+    end
+    
+    # Expected total lines: 1 (count) + n_histos * 5 (name + 4 data lines per histogram)
+    expected_lines = 1 + n_histos * 5
+    if length(lines) != expected_lines
+        error("Invalid histogram collection file format. Expected $expected_lines lines, got $(length(lines))")
+    end
+    
+    histos = Dict{String, Histo1d}()
+    line_idx = 2  # Start after the count line
+    
+    for i in 1:n_histos
+        # Parse histogram name
+        name = strip(lines[line_idx])
+        line_idx += 1
+        
+        # Parse number of bins
+        n_bins = parse(Int, strip(lines[line_idx]))
+        line_idx += 1
+        
+        # Parse edges
+        edges = parse.(Float64, split(strip(lines[line_idx])))
+        line_idx += 1
+        
+        # Parse weights
+        weights = parse.(Float64, split(strip(lines[line_idx])))
+        line_idx += 1
+        
+        # Parse centers
+        centers = parse.(Float64, split(strip(lines[line_idx])))
+        line_idx += 1
+        
+        # Validate dimensions
+        if length(weights) != n_bins
+            error("Histogram '$name': expected $n_bins weights, got $(length(weights))")
+        end
+        
+        if length(edges) != n_bins + 1
+            error("Histogram '$name': expected $(n_bins + 1) edges, got $(length(edges))")
+        end
+        
+        if length(centers) != n_bins
+            error("Histogram '$name': expected $n_bins centers, got $(length(centers))")
+        end
+        
+        # Create histogram and add to collection
+        histos[name] = Histo1d(edges, weights, centers)
+    end
+    
+    return histos
 end
 
 end # module 

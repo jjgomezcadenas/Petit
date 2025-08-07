@@ -1,5 +1,7 @@
 using DataFrames
 import Glob 
+using HDF5
+
 
 ## Use abstract type to select range conditions
 ## Method inspired by https://www.juliabloggers.com/julia-dispatching-enum-versus-type/
@@ -11,6 +13,31 @@ struct RightClosed <: ValueBound end
 
 using Printf
 
+
+function getdirs(bdir::AbstractString)
+	fdrs = Glob.glob("*", bdir)
+	[split(f,"/")[end] for f in fdrs]
+end
+
+
+function get_dataset_dfs(filename::String)
+    h5open(filename, "r") do fid
+        group = fid["MC"]
+        dfs = Dict{String, DataFrame}()
+
+        for name in keys(group)
+            data = read(group[name])
+            # Try to make a DataFrame if it's an array of structs or tuples
+            try
+                dfs[name] = DataFrame(data)
+            catch
+                dfs[name] = DataFrame((value=data,))
+            end
+        end
+
+        return dfs  # Dict of DataFrames
+    end
+end
 
 """
     get_vals_from_sparse(sm) -> (rows, cols, vals)
