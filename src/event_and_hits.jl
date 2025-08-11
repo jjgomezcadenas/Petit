@@ -90,6 +90,74 @@ function energy_primary(partdf::DataFrame)
 end
 
 
+function find_events_with_alphas(partdf::DataFrame)
+    # Group by event_id and process each group
+    ghdf = groupby(partdf, :event_id)
+    energies = Vector{Float64}()
+    xs = Vector{Float64}()
+    ys = Vector{Float64}()
+    zs = Vector{Float64}()
+    ids = Vector{Int64}()
+    fvs = Vector{String}()  # Assuming final_volume is a String, adjust if needed
+    
+    for group in ghdf
+        # Filter for alphas within this event group
+        alphas = filter(row -> row.particle_name == "alpha", group)
+        for alpha in eachrow(alphas)
+            push!(ids, alpha.event_id)
+            push!(energies, alpha.kin_energy)
+            push!(xs, alpha.initial_x)
+            push!(ys, alpha.initial_y)
+            push!(zs, alpha.initial_z)
+            push!(fvs, alpha.final_volume)
+        end
+    end
+    
+    return DataFrame(event_id=ids, x=xs, y=ys, z=zs, energy=energies, finalv=fvs)
+end
+
+
+
+
+function filter_fiducial_events(hitsdf::DataFrame, xyc::Float64, zc::Float64)
+    """
+    Filter events based on fiducial volume cuts.
+    
+    An event passes the fiducial cuts if ALL hits in that event satisfy:
+    - |x| < xyc (x within ±xyc)
+    - |y| < xyc (y within ±xyc)
+    - z > zc OR z < -zc (z outside the central band [-zc, zc])
+    
+    Parameters:
+    - hitsdf: DataFrame with columns event_id, x, y, z
+    - xyc: Cut value for x and y coordinates
+    - zc: Cut value for z coordinate
+    
+    Returns:
+    - DataFrame with events that pass all fiducial cuts
+    """
+    
+    # Group by event_id and apply fiducial cuts
+    grouped_df = groupby(hitsdf, :event_id)
+    
+    result = combine(grouped_df, 
+        [:x, :y, :z] => ((x, y, z) -> 
+            all(abs.(x) .< xyc) &&                    # All |x| < xyc
+            all(abs.(y) .< xyc) &&                    # All |y| < xyc  
+            all((z .> zc) .| (z .< -zc))              # All z outside [-zc, zc]
+        ) => :passes_fiducial_cuts
+    )
+    
+    # Get event IDs that pass all cuts
+    passing_event_ids = result[result.passes_fiducial_cuts, :event_id]
+    
+    # Filter original DataFrame to keep only passing events
+    filtered_df = filter(row -> row.event_id in passing_event_ids, hitsdf)
+    
+    return filtered_df
+end
+
+
 function energy_primary(partdf::DataFrame, event_id::Int)
     # Get specific event
     event_particles = filter(:event_id => ==(event_id), partdf)

@@ -20,11 +20,11 @@ include("plots.jl")
 
 
 export Tracks, AnalysisResults, TracksSummary
-export get_event, voxelize_hits, euclidean_distance, build_tracks, select_events, analysis_loop
+export get_event, voxelize_hits, euclidean_distance, build_tracks, select_events, analysis_loop, make_tracks
 export voxel_distances, voxel_closest_distance, voxel_energy
-export hits_per_event, hits_per_all_events, number_of_events, energy_primary, energy_deposited
+export hits_per_event, hits_per_all_events, number_of_events, energy_primary, energy_deposited, find_events_with_alphas, filter_fiducial_events
 export plot_hits_evt, plot_hits_trk, plot_hits
-export event_loop, event_loop_pluto, analysis_loop_pluto, get_dataset_dfs, histogram_results, getdirs, smear_histogram, example_smearing, counts_in_range, save_analysis_results, load_analysis_results
+export event_loop, get_dataset_dfs, histogram_results, getdirs, smear_histogram, example_smearing, counts_in_range, save_analysis_results, load_analysis_results
 
 # Re-export histos functions
 export hist1d, hist2d, p1df, step_hist, get_histo1d, Histo1d

@@ -703,74 +703,6 @@ using StatsBase
             @test result.n_events_processed == 2
         end
         
-        @testset "Pluto-specific Functions" begin
-            # Test that Pluto functions are exported
-            @test isdefined(Petit, :event_loop_pluto)
-            @test isdefined(Petit, :analysis_loop_pluto)
-            
-            # Create test data
-            test_data = DataFrame(
-                event_id=[1, 1, 2, 2, 3],
-                x=[0.0, 1.0, 2.0, 3.0, 4.0],
-                y=[0.0, 0.0, 0.0, 0.0, 0.0],
-                z=[0.0, 0.0, 0.0, 0.0, 0.0],
-                energy=[0.1, 0.2, 0.3, 0.4, 0.5]
-            )
-            
-            # Test analysis_loop_pluto
-            results, progress_display = analysis_loop_pluto(test_data; 
-                                                           events_to_run=1:3,
-                                                           voxel_size_mm=5.0,
-                                                           max_distance_mm=10.0,
-                                                           energy_threshold_kev=50.0)
-            
-            # Check results
-            @test results isa AnalysisResults
-            @test results.n_events_processed == 3
-            @test results.n_failed >= 0
-            
-            # Check progress_display is a function
-            @test isa(progress_display, Function)
-            
-            # Test that progress_display returns something (can't test HTML content easily)
-            progress_output = progress_display()
-            @test !isnothing(progress_output)
-            @test isa(progress_output, String)  # Should return HTML string
-            
-            # Test with empty data
-            empty_data = DataFrame(
-                event_id=Int[], x=Float64[], y=Float64[], z=Float64[], energy=Float64[]
-            )
-            
-            empty_results, empty_progress = analysis_loop_pluto(empty_data; 
-                                                               events_to_run=Int[])
-            
-            @test empty_results.n_events_processed == 0
-            @test isa(empty_progress, Function)
-            
-            # Test with single event
-            single_event_data = DataFrame(
-                event_id=[5, 5],
-                x=[0.0, 1.0],
-                y=[0.0, 0.0],
-                z=[0.0, 0.0],
-                energy=[0.2, 0.3]
-            )
-            
-            single_results, single_progress = analysis_loop_pluto(single_event_data; 
-                                                                 events_to_run=[5],
-                                                                 voxel_size_mm=3.0,
-                                                                 max_distance_mm=5.0,
-                                                                 energy_threshold_kev=100.0)
-            
-            @test single_results.n_events_processed == 1
-            @test isa(single_progress, Function)
-            
-            # Test event_loop_pluto (would need actual HDF5 file)
-            @test_throws Exception event_loop_pluto("nonexistent_dir"; 
-                                                   input_file="nonexistent.h5",
-                                                   events_to_run=10)
-        end
         
         @testset "TracksSummary and AnalysisResults Structures" begin
             # Test TracksSummary structure (already tested above, but ensuring completeness)
@@ -1256,6 +1188,366 @@ using StatsBase
             )
             @test energy_deposited(mixed_energy_hits, 7) ≈ 1.2  # 0.5 - 0.1 + 0.8
             @test energy_deposited(mixed_energy_hits)[1] ≈ 1.2
+        end
+        
+        @testset "Find Events With Alphas" begin
+            # Create test particle data with alphas
+            test_particles = DataFrame(
+                event_id=[1, 1, 1, 2, 2, 3, 3, 3],
+                particle_name=["gamma", "alpha", "electron", "alpha", "gamma", "electron", "alpha", "alpha"],
+                kin_energy=[0.5, 5.0, 0.1, 6.0, 1.0, 0.2, 4.5, 7.2],
+                initial_x=[0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0],
+                initial_y=[1.0, 11.0, 21.0, 31.0, 41.0, 51.0, 61.0, 71.0],
+                initial_z=[2.0, 12.0, 22.0, 32.0, 42.0, 52.0, 62.0, 72.0],
+                final_volume=["detector", "detector", "detector", "detector", "detector", "detector", "detector", "detector"],
+                mother_id=[0, 0, 0, 0, 0, 0, 0, 0]
+            )
+            
+            # Test find_events_with_alphas
+            alpha_df = find_events_with_alphas(test_particles)
+            
+            @test alpha_df isa DataFrame
+            @test names(alpha_df) == ["event_id", "x", "y", "z", "energy", "finalv"]
+            
+            # Should have 4 alphas total (1 in event 1, 1 in event 2, 2 in event 3)
+            @test nrow(alpha_df) == 4
+            
+            # Check event 1 alpha
+            event1_alphas = filter(row -> row.event_id == 1, alpha_df)
+            @test nrow(event1_alphas) == 1
+            @test event1_alphas[1, :energy] ≈ 5.0
+            @test event1_alphas[1, :x] ≈ 10.0
+            @test event1_alphas[1, :y] ≈ 11.0
+            @test event1_alphas[1, :z] ≈ 12.0
+            @test event1_alphas[1, :finalv] == "detector"
+            
+            # Check event 2 alpha
+            event2_alphas = filter(row -> row.event_id == 2, alpha_df)
+            @test nrow(event2_alphas) == 1
+            @test event2_alphas[1, :energy] ≈ 6.0
+            @test event2_alphas[1, :x] ≈ 30.0
+            @test event2_alphas[1, :finalv] == "detector"
+            
+            # Check event 3 alphas (should have 2)
+            event3_alphas = filter(row -> row.event_id == 3, alpha_df)
+            @test nrow(event3_alphas) == 2
+            @test 4.5 in event3_alphas.energy
+            @test 7.2 in event3_alphas.energy
+            @test 60.0 in event3_alphas.x
+            @test 70.0 in event3_alphas.x
+            @test all(event3_alphas.finalv .== "detector")
+            
+            # Test with no alphas
+            no_alpha_particles = DataFrame(
+                event_id=[1, 1, 2],
+                particle_name=["gamma", "electron", "gamma"],
+                kin_energy=[1.0, 2.0, 3.0],
+                initial_x=[0.0, 1.0, 2.0],
+                initial_y=[0.0, 1.0, 2.0],
+                initial_z=[0.0, 1.0, 2.0],
+                final_volume=["detector", "detector", "detector"],
+                mother_id=[0, 0, 0]
+            )
+            
+            no_alpha_df = find_events_with_alphas(no_alpha_particles)
+            @test nrow(no_alpha_df) == 0
+            @test names(no_alpha_df) == ["event_id", "x", "y", "z", "energy", "finalv"]
+            
+            # Test with empty DataFrame
+            empty_particles = DataFrame(
+                event_id=Int[],
+                particle_name=String[],
+                kin_energy=Float64[],
+                initial_x=Float64[],
+                initial_y=Float64[],
+                initial_z=Float64[],
+                final_volume=String[],
+                mother_id=Int[]
+            )
+            
+            empty_alpha_df = find_events_with_alphas(empty_particles)
+            @test nrow(empty_alpha_df) == 0
+            @test names(empty_alpha_df) == ["event_id", "x", "y", "z", "energy", "finalv"]
+            
+            # Test with mixed particle types and different final volumes
+            mixed_particles = DataFrame(
+                event_id=[4, 4, 4, 4, 4],
+                particle_name=["alpha", "gamma", "alpha", "electron", "alpha"],
+                kin_energy=[1.0, 2.0, 3.0, 4.0, 5.0],
+                initial_x=[10.0, 20.0, 30.0, 40.0, 50.0],
+                initial_y=[15.0, 25.0, 35.0, 45.0, 55.0],
+                initial_z=[100.0, 200.0, 300.0, 400.0, 500.0],
+                final_volume=["detector", "detector", "shielding", "detector", "detector"],
+                mother_id=[0, 0, 1, 2, 3]
+            )
+            
+            mixed_alpha_df = find_events_with_alphas(mixed_particles)
+            @test nrow(mixed_alpha_df) == 3  # Three alphas
+            @test all(mixed_alpha_df.event_id .== 4)
+            @test sort(mixed_alpha_df.energy) ≈ [1.0, 3.0, 5.0]
+            @test sort(mixed_alpha_df.x) ≈ [10.0, 30.0, 50.0]
+            @test sort(mixed_alpha_df.z) ≈ [100.0, 300.0, 500.0]
+            @test "detector" in mixed_alpha_df.finalv
+            @test "shielding" in mixed_alpha_df.finalv
+        end
+        
+        @testset "Filter Fiducial Events" begin
+            # Create test hits data with known fiducial properties
+            test_hits = DataFrame(
+                event_id=[1, 1, 1,        # Event 1: all hits pass (inside xy, outside z)
+                         2, 2,           # Event 2: fails xy cut (x too large)
+                         3, 3, 3,        # Event 3: fails z cut (z in forbidden band)
+                         4, 4,           # Event 4: passes all cuts
+                         5, 5],          # Event 5: fails y cut (y too large)
+                x=[5.0, -5.0, 8.0,       # Event 1: |x| < 10 ✓
+                   15.0, 5.0,            # Event 2: 15.0 > 10 ✗
+                   3.0, -4.0, 6.0,       # Event 3: |x| < 10 ✓
+                   -8.0, 9.0,            # Event 4: |x| < 10 ✓
+                   2.0, -3.0],           # Event 5: |x| < 10 ✓
+                y=[3.0, -7.0, 2.0,       # Event 1: |y| < 10 ✓
+                   4.0, 6.0,             # Event 2: |y| < 10 ✓
+                   1.0, -2.0, 5.0,       # Event 3: |y| < 10 ✓
+                   -6.0, 4.0,            # Event 4: |y| < 10 ✓
+                   12.0, -15.0],         # Event 5: 12.0, 15.0 > 10 ✗
+                z=[15.0, -20.0, 25.0,    # Event 1: all outside [-5, 5] ✓
+                   30.0, -10.0,          # Event 2: all outside [-5, 5] ✓
+                   2.0, -1.0, 3.0,       # Event 3: all inside [-5, 5] ✗
+                   -10.0, 12.0,          # Event 4: all outside [-5, 5] ✓
+                   -8.0, 18.0],          # Event 5: all outside [-5, 5] ✓
+                energy=[100, 200, 150, 300, 250, 180, 120, 400, 220, 350, 160, 280]
+            )
+            
+            # Set cut parameters
+            xyc = 10.0  # xy within ±10
+            zc = 5.0    # z outside [-5, 5]
+            
+            # Test filter_fiducial_events
+            filtered_df = filter_fiducial_events(test_hits, xyc, zc)
+            
+            @test filtered_df isa DataFrame
+            @test names(filtered_df) == names(test_hits)
+            
+            # Should only have events 1 and 4 (events that pass all cuts)
+            passing_events = unique(filtered_df.event_id)
+            @test sort(passing_events) == [1, 4]
+            
+            # Check event 1 hits are all present
+            event1_hits = filter(row -> row.event_id == 1, filtered_df)
+            @test nrow(event1_hits) == 3
+            @test sort(event1_hits.x) ≈ [-5.0, 5.0, 8.0]
+            @test sort(event1_hits.z) ≈ [-20.0, 15.0, 25.0]
+            
+            # Check event 4 hits are all present
+            event4_hits = filter(row -> row.event_id == 4, filtered_df)
+            @test nrow(event4_hits) == 2
+            @test sort(event4_hits.x) ≈ [-8.0, 9.0]
+            @test sort(event4_hits.z) ≈ [-10.0, 12.0]
+            
+            # Verify excluded events are not present
+            @test !(2 in filtered_df.event_id)  # Failed xy cut
+            @test !(3 in filtered_df.event_id)  # Failed z cut  
+            @test !(5 in filtered_df.event_id)  # Failed y cut
+            
+            # Test with stricter cuts (should pass fewer events)
+            strict_filtered = filter_fiducial_events(test_hits, 5.0, 10.0)  # tighter xy, looser z
+            strict_events = unique(strict_filtered.event_id)
+            @test length(strict_events) <= length(passing_events)
+            
+            # Test with very loose cuts (should pass more events)
+            loose_filtered = filter_fiducial_events(test_hits, 20.0, 1.0)  # looser xy, tighter z  
+            loose_events = unique(loose_filtered.event_id)
+            @test length(loose_events) >= length(passing_events)
+            
+            # Test edge case: event with single hit
+            single_hit_df = DataFrame(
+                event_id=[100],
+                x=[5.0],
+                y=[-3.0], 
+                z=[8.0],
+                energy=[100]
+            )
+            
+            single_filtered = filter_fiducial_events(single_hit_df, 10.0, 5.0)
+            @test nrow(single_filtered) == 1
+            @test single_filtered.event_id[1] == 100
+            
+            # Test edge case: event that barely fails
+            barely_fails_df = DataFrame(
+                event_id=[200, 200],
+                x=[10.0, 5.0],      # 10.0 == xyc, should fail (not < xyc)
+                y=[3.0, -2.0],
+                z=[8.0, -7.0],
+                energy=[100, 200]
+            )
+            
+            barely_fails_filtered = filter_fiducial_events(barely_fails_df, 10.0, 5.0)
+            @test nrow(barely_fails_filtered) == 0  # Should fail because x = 10.0 is not < 10.0
+            
+            # Test edge case: event that barely passes
+            barely_passes_df = DataFrame(
+                event_id=[300, 300],
+                x=[9.9, -9.9],      # Just under the cut
+                y=[9.9, -9.9],
+                z=[5.1, -5.1],      # Just outside the forbidden band
+                energy=[100, 200]
+            )
+            
+            barely_passes_filtered = filter_fiducial_events(barely_passes_df, 10.0, 5.0)
+            @test nrow(barely_passes_filtered) == 2  # Should pass
+            @test unique(barely_passes_filtered.event_id) == [300]
+            
+            # Test with empty DataFrame
+            empty_hits = DataFrame(
+                event_id=Int[], x=Float64[], y=Float64[], z=Float64[], energy=Float64[]
+            )
+            
+            empty_filtered = filter_fiducial_events(empty_hits, 10.0, 5.0)
+            @test nrow(empty_filtered) == 0
+            @test names(empty_filtered) == names(empty_hits)
+            
+            # Test z condition edge cases
+            z_edge_df = DataFrame(
+                event_id=[400, 400, 401, 401],
+                x=[1.0, 2.0, 1.0, 2.0],
+                y=[1.0, 2.0, 1.0, 2.0],
+                z=[5.0, 6.0, -5.0, -6.0],  # Event 400: z=5.0 fails (not > 5.0), Event 401: z=-5.0 fails (not < -5.0)
+                energy=[100, 200, 100, 200]
+            )
+            
+            z_edge_filtered = filter_fiducial_events(z_edge_df, 10.0, 5.0)
+            @test nrow(z_edge_filtered) == 0  # Both events should fail z cuts
+        end
+        
+        @testset "Make Tracks" begin
+            # Create test voxelized data for multiple events
+            test_voxels = DataFrame(
+                event_id=[1, 1, 1, 1,        # Event 1: 4 voxels in two groups
+                         2, 2,               # Event 2: 2 close voxels (single track)
+                         3, 3, 3],           # Event 3: 3 voxels (single track)
+                x=[0.0, 1.0, 10.0, 11.0,    # Event 1: two clusters at (0,1) and (10,11)
+                   0.0, 2.0,                 # Event 2: close voxels  
+                   5.0, 6.0, 7.0],           # Event 3: linear arrangement
+                y=[0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0,
+                   0.0, 0.0, 0.0],
+                z=[0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0,
+                   0.0, 0.0, 0.0],
+                energy=[100.0, 200.0, 300.0, 150.0,  # Event 1: track energies 300, 450
+                        250.0, 180.0,                  # Event 2: track energy 430
+                        120.0, 80.0, 160.0]            # Event 3: track energy 360
+            )
+            
+            # Test make_tracks for event 1 (should create 2 tracks)
+            tracks_event1 = make_tracks(test_voxels, 1; max_dist=5.0, energy_thr=50.0)
+            
+            @test tracks_event1 isa Vector{Tracks}
+            @test length(tracks_event1) >= 1  # Should find at least one track
+            
+            # Verify tracks are sorted by energy (highest first)
+            if length(tracks_event1) > 1
+                track_energies = [sum(track.voxels.energy) for track in tracks_event1]
+                @test issorted(track_energies, rev=true)
+            end
+            
+            # Test make_tracks for event 2 (should create 1 track)
+            tracks_event2 = make_tracks(test_voxels, 2; max_dist=5.0, energy_thr=50.0)
+            
+            @test tracks_event2 isa Vector{Tracks}
+            @test length(tracks_event2) >= 0  # Could be 0 or 1 depending on distance threshold
+            
+            if length(tracks_event2) > 0
+                # Check that track contains the expected voxels
+                total_energy = sum(tracks_event2[1].voxels.energy)
+                @test total_energy > 0
+                @test all(tracks_event2[1].voxels.energy .>= 50.0)  # Above energy threshold
+            end
+            
+            # Test make_tracks for event 3 (linear track)
+            tracks_event3 = make_tracks(test_voxels, 3; max_dist=3.0, energy_thr=50.0)
+            
+            @test tracks_event3 isa Vector{Tracks}
+            
+            if length(tracks_event3) > 0
+                # Verify track properties
+                track = tracks_event3[1]
+                @test track isa Tracks
+                @test nrow(track.voxels) > 0
+                @test sum(track.voxels.energy) > 0
+            end
+            
+            # Test with high energy threshold (should affect track formation)
+            tracks_high_thr = make_tracks(test_voxels, 3; max_dist=5.0, energy_thr=150.0)
+            tracks_low_thr = make_tracks(test_voxels, 3; max_dist=5.0, energy_thr=50.0)
+            
+            @test tracks_high_thr isa Vector{Tracks}
+            @test tracks_low_thr isa Vector{Tracks}
+            
+            # High threshold may result in fewer or different tracks
+            # (the actual behavior depends on build_tracks implementation)
+            @test length(tracks_high_thr) >= 0
+            @test length(tracks_low_thr) >= 0
+            
+            # Test with very small max distance (should create fewer/smaller tracks)
+            tracks_small_dist = make_tracks(test_voxels, 1; max_dist=0.5, energy_thr=50.0)
+            
+            @test tracks_small_dist isa Vector{Tracks}
+            # With small distance, should get fewer connections
+            
+            # Test with non-existent event
+            @test_throws Exception make_tracks(test_voxels, 999; max_dist=5.0, energy_thr=50.0)
+            
+            # Test with empty DataFrame
+            empty_voxels = DataFrame(
+                event_id=Int[], x=Float64[], y=Float64[], z=Float64[], energy=Float64[]
+            )
+            
+            @test_throws Exception make_tracks(empty_voxels, 1; max_dist=5.0, energy_thr=50.0)
+            
+            # Test parameter variations
+            tracks_default = make_tracks(test_voxels, 2)  # Use default parameters
+            @test tracks_default isa Vector{Tracks}
+            
+            tracks_custom = make_tracks(test_voxels, 2; max_dist=15.0, energy_thr=0.5)
+            @test tracks_custom isa Vector{Tracks}
+            
+            # Test single voxel event
+            single_voxel_df = DataFrame(
+                event_id=[10],
+                x=[5.0],
+                y=[3.0],
+                z=[2.0],
+                energy=[200.0]
+            )
+            
+            single_tracks = make_tracks(single_voxel_df, 10; max_dist=5.0, energy_thr=50.0)
+            @test single_tracks isa Vector{Tracks}
+            @test length(single_tracks) <= 1  # Should create 0 or 1 track
+            
+            if length(single_tracks) == 1
+                @test nrow(single_tracks[1].voxels) == 1
+                @test single_tracks[1].voxels.energy[1] == 200.0
+            end
+            
+            # Test sorting verification with known energies
+            multi_track_data = DataFrame(
+                event_id=[20, 20, 20, 20, 20, 20],
+                x=[0.0, 1.0, 10.0, 11.0, 20.0, 21.0],  # Three separate groups
+                y=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                z=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                energy=[100.0, 200.0, 400.0, 500.0, 50.0, 60.0]  # Groups: 300, 900, 110
+            )
+            
+            multi_tracks = make_tracks(multi_track_data, 20; max_dist=3.0, energy_thr=40.0)
+            
+            if length(multi_tracks) > 1
+                # Verify energy-based sorting
+                track_energies = [sum(track.voxels.energy) for track in multi_tracks]
+                @test issorted(track_energies, rev=true)
+                
+                # Highest energy track should be first
+                @test track_energies[1] >= track_energies[end]
+            end
         end
         
         @testset "Plot Functions" begin

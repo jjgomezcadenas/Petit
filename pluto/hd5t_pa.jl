@@ -57,15 +57,15 @@ begin
 
 # ╔═╡ 3ae5d298-b9df-4f4e-85d9-d75e4aee1654
 md"""
-======================================================================
-0nubb.h5                       | Particles:   8995 | Hits:   8995
-bi214_copper.h5                | Particles:   2977 | Hits:   2977
-bi214_surface.h5               | Particles:  11150 | Hits:  11150
-electron_0nubb_energy.h5       | Particles:   8483 | Hits:   8483
-tl208_copper.h5                | Particles:   3514 | Hits:   3514
-tl208_surface.h5               | Particles:   5121 | Hits:   5121
-======================================================================
-"""
+  | File | Particles | Hits |
+  |:-----|----------:|-----:|
+  | 0nubb.h5 | 8,995 | 8,995 |
+  | bi214_copper.h5 | 2,977 | 2,977 |
+  | bi214_surface.h5 | 11,150 | 11,150 |
+  | electron_0nubb_energy.h5 | 8,483 | 8,483 |
+  | tl208_copper.h5 | 3,514 | 3,514 |
+  | tl208_surface.h5 | 5,121 | 5,121 |
+  """
 
 # ╔═╡ 6c59aeae-7990-4b43-8378-0de210a3291a
 md"""
@@ -111,33 +111,56 @@ else
 end
 
 # ╔═╡ 2b3c4d5e-f6a7-4b8c-9d1e-2f3a4b5c6d7e
-begin
-	# bi214_copper results file location
-	results_bi214 = joinpath(results_dir, "bi214_copper.jls")
-	md"""
-	Loading results from: $(results_bi214)
-	"""
-	
-end
+md"""
+## Select Background File
+Choose which background analysis results to load:
+"""
+
+# ╔═╡ 9e2f3d4e-a5b6-4c7d-8e9f-1a2b3c4d5f6a
+@bind background_file Select([
+	"bi214_copper" => "Bi214 Copper",
+	"bi214_surface" => "Bi214 Surface",
+	"tl208_copper" => "Tl208 Copper",
+	"tl208_surface" => "Tl208 Surface",
+	"electron_0nubb_energy" => "Electron 0νββ Energy"
+], default="bi214_copper")
 
 # ╔═╡ 9f3e1cdb-758c-4223-ac86-1d63ac8f03da
-md"Load bi214 results? $(@bind load_bi214 CheckBox(default=true))"
+begin
+	# Construct the results file path based on selection
+	results_bkg = joinpath(results_dir, "$(background_file).jls")
+	# Extract display name from the file name
+	bkg_display_name = replace(background_file, "_" => " ") |> titlecase
+	md"""
+	Load $(bkg_display_name) results? $(@bind load_bkg CheckBox(default=true))
+	
+	Results file: $(results_bkg)
+	"""
+end
 
 # ╔═╡ 4d5e6f7a-b8c9-4d1e-2f3a-4b5c6d7e8f9a
-if load_bi214
-	rbi214 = Petit.load_analysis_results(results_bi214)
-	md"""
-	✅ **Bi214 Copper Results!**
-	
-	- **Events processed:** $(rbi214.n_events_processed)
-	- **Single track events:** $(rbi214.n_single_track)
-	- **Two track events:** $(rbi214.n_two_track)
-	- **Three+ track events:** $(rbi214.n_three_plus_track)
-	- **Failed events:** $(rbi214.n_failed)
-	"""
+if load_bkg
+	if isfile(results_bkg)
+		rbi214 = Petit.load_analysis_results(results_bkg)
+		md"""
+		✅ **$(bkg_display_name) Results Loaded!**
+		
+		- **Events processed:** $(rbi214.n_events_processed)
+		- **Single track events:** $(rbi214.n_single_track)
+		- **Two track events:** $(rbi214.n_two_track)
+		- **Three+ track events:** $(rbi214.n_three_plus_track)
+		- **Failed events:** $(rbi214.n_failed)
+		"""
+	else
+		md"""
+		⚠️ Results file not found: $(results_bkg)
+		
+		Please ensure the analysis has been run for $(bkg_display_name).
+		"""
+	end
 else
 	md"""
-	⚠️ Check the box above to load the bi214_copper results.
+	⚠️ Check the box above to load the $(bkg_display_name) results.
 	"""
 end
 
@@ -162,7 +185,7 @@ if load_znubb
 end
 
 # ╔═╡ 5e6f7a8b-c9d1-4e2f-3a4b-5c6d7e8f9a1b
-if load_bi214
+if load_bkg
 	md"""
 	### Event Classification Summary (Bi214)
 	
@@ -186,6 +209,9 @@ md"""
 ### Single Track Events (0νββ): e = $(round(mean(rznubb.single_track.energies), digits=2))
 """
 
+# ╔═╡ eba21011-2c2a-4540-b096-d39141d9abb2
+0.5 * 2457.5/100
+
 # ╔═╡ 6624fb61-e8ac-41e5-a602-c8765e21cede
 if load_znubb && length(rznubb.single_track.energies) > 0
 	eht1, pht1 = Petit.step_hist(rznubb.single_track.energies;
@@ -205,10 +231,10 @@ md"""
 """
 
 # ╔═╡ 7a8b9c1d-e2f3-4a5b-6c7d-8e9f1a2b3c4d
-if load_bi214 && length(rbi214.single_track.energies) > 0
+if load_bkg && length(rbi214.single_track.energies) > 0
 	eht1_bi214, pht1_bi214 = Petit.step_hist(rbi214.single_track.energies;
          nbins = 40,
-         xlim   = (0.0, 3500.0),
+         xlim   = (2300.0, 2700.0),
          xlabel = "E (keV)",
          ylabel = "Frequency",
          title="Single Track Energy Distribution (Bi214)")
@@ -258,7 +284,7 @@ else
 end
 
 # ╔═╡ 7fde840d-0c00-4593-b0ae-52d1990e8c4e
-if load_bi214 && length(rbi214.single_track.energies) > 0
+if load_bkg && length(rbi214.single_track.energies) > 0
 	eres_bi214 = Petit.smear_histogram(eht1_bi214, erex)
 	ehrx_bi214, phrx_bi214 = Petit.step_hist(eres_bi214;
          nbins = 40,
@@ -275,6 +301,9 @@ end
 md"""
 ### Signal Efficiency vs ROI
 """
+
+# ╔═╡ cd3ef36e-7150-47a5-9cec-9fa4d0e5779e
+ 
 
 # ╔═╡ 37d7c197-0a10-4145-ab85-b5a22eae273e
 md"""
@@ -334,7 +363,7 @@ else
 end
 
 # ╔═╡ 1d2e3f4a-b5c6-7d8e-9f1a-2b3c4d5e6f7a
-if load_bi214
+if load_bkg
 	single_energies_bi214 = rbi214.single_track.energies
 	two_primary_energies_bi214 = rbi214.two_track_primary.energies
 	
@@ -367,12 +396,12 @@ if load_bi214
 	)
 	
 	md"""
-	### Energy Statistics (keV) - Bi214 Copper
+	### Energy Statistics (keV) - $(bkg_display_name)
 	
 	$(stats_df_bi214)
 	"""
 else
-	md"Load bi214_copper results to see statistics."
+	md"Load $(bkg_display_name) results to see statistics."
 end
 
 # ╔═╡ 21f70e07-ef56-4b84-87df-dd4e0d468ed1
@@ -475,7 +504,7 @@ else
 end
 
 # ╔═╡ 1963d9dc-0cb9-4b8e-98ee-41491c6c784b
-if load_bi214 && length(rbi214.single_track.energies) > 0
+if load_bkg && length(rbi214.single_track.energies) > 0
 	#step = 5.0
 	#xx = roi_low:step:roi_up
 	countx_bi214 = signal_eff(ehrx_bi214, roi_low, roi_up; step=step)
@@ -490,17 +519,51 @@ else
 end
 
 # ╔═╡ 705979ca-69e9-48e1-9440-ef0ab8c66154
-function integrated_signal_eff(ehrx, rlow, rup, rmin=2350.0) 
+function integrated_signal_eff(ehrx, rlow, rup, rmin, rmax) 
 	n1 = counts_in_range(ehrx, rlow, rup)
-	n2 = counts_in_range(ehrx, rmin, rup)
-	return n1, n1/n2
+	n2 = counts_in_range(ehrx, rmin, rmax)
+	return n1, n2, n2/n1
 end
 
 # ╔═╡ 742b17ab-27fc-418c-9265-522fde5235bb
-integrated_signal_eff(ehrx, 2430.0, 2500.0)
+integrated_signal_eff(ehrx, 2400.0, 2500.0, 2430.0, 2500.0)
 
 # ╔═╡ b3634a2f-6600-4480-b316-2a79af18653e
-integrated_signal_eff(ehrx_bi214, 2430.0, 2500.0)
+integrated_signal_eff(ehrx_bi214, 2400.0, 2500.0, 2430.0, 2500.0)
+
+# ╔═╡ f301f5cf-0dc6-49d9-bd4d-ff117ea56a2e
+begin
+	signal_2e = 0.8
+	signal_contained = 0.9
+	signal_1trk = rznubb.n_single_track/rznubb.n_events_processed
+	signal_roi = integrated_signal_eff(ehrx, 2400.0, 2500.0, 2430.0, 2500.0)[3]
+	signal_teff = signal_2e * signal_contained * signal_1trk * signal_roi
+	md"""
+	### Signal efficiency ($(erex) keV FWHM resolution)
+	- Fraction of events contained $(signal_contained)
+	- Fraction of events 1 track $(round(signal_1trk, digits=2))
+	- Fraction of events ROIS $(round(signal_1trk, digits=2))
+	- Fraction of events 1/2 electron $(signal_2e)
+	- Total signal efficiency: $(round(signal_teff, digits=2))
+	"""
+end
+
+# ╔═╡ 06bac1d3-c340-49ce-bd7c-92164e412590
+begin
+	bi214_cu_2e = 0.04
+	bi214_cu_contained = 3e-6
+	bi214_cu_1trk = rbi214.n_single_track/rbi214.n_events_processed
+	bi214_cu_roi = integrated_signal_eff(ehrx_bi214, 2400.0, 2500.0, 2430.0, 2500.0)[3]
+	bi214_cu_teff = bi214_cu_2e * bi214_cu_contained * bi214_cu_1trk * bi214_cu_roi
+	md"""
+	### Signal efficiency ($(erex) keV FWHM resolution)
+	- Fraction of events contained $(bi214_cu_contained)
+	- Fraction of events 1 track $(round(bi214_cu_1trk, digits=2))
+	- Fraction of events ROIS $(round(bi214_cu_1trk, digits=2))
+	- Fraction of events 1/2 electron $(bi214_cu_2e)
+	- Total signal efficiency: $(bi214_cu_teff)
+	"""
+end
 
 # ╔═╡ ea1afc2f-9467-4b8b-a3e3-237925ac9fa1
 function histogram_energies_trks(rznubb)
@@ -564,10 +627,10 @@ else
 end
 
 # ╔═╡ 8b9c1d2e-f3a4-5b6c-7d8e-9f1a2b3c4d5e
-if load_bi214
+if load_bkg
 	histogram_energies_trks(rbi214)
 else
-	md"Load bi214_copper results to see multi-track energy distributions."
+	md"Load $(bkg_display_name) results to see multi-track energy distributions."
 end
 
 # ╔═╡ de61fd85-48cf-4c49-8abc-f929bdc4c3fc
@@ -621,10 +684,10 @@ else
 end
 
 # ╔═╡ 9c1d2e3f-a4b5-6c7d-8e9f-1a2b3c4d5e6f
-if load_bi214
+if load_bkg
 	plot_position_distributions(rbi214)
 else
-	md"Load bi214_copper results to see position distributions."
+	md"Load $(bkg_display_name) results to see position distributions."
 end
 
 # ╔═╡ Cell order:
@@ -640,6 +703,7 @@ end
 # ╠═5caa7c21-82e5-420b-b4e7-a0e33543b74b
 # ╠═8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
 # ╠═2b3c4d5e-f6a7-4b8c-9d1e-2f3a4b5c6d7e
+# ╠═9e2f3d4e-a5b6-4c7d-8e9f-1a2b3c4d5f6a
 # ╠═9f3e1cdb-758c-4223-ac86-1d63ac8f03da
 # ╠═4d5e6f7a-b8c9-4d1e-2f3a-4b5c6d7e8f9a
 # ╠═07b4e4c1-0469-41ca-9890-bb4f990b4645
@@ -647,6 +711,7 @@ end
 # ╠═5e6f7a8b-c9d1-4e2f-3a4b-5c6d7e8f9a1b
 # ╟─144d60a3-d70f-442b-a252-76178fecdbf7
 # ╠═0fa67f2a-50a5-4c82-b42b-07f45f14e914
+# ╠═eba21011-2c2a-4540-b096-d39141d9abb2
 # ╠═6624fb61-e8ac-41e5-a602-c8765e21cede
 # ╠═6f7a8b9c-d1e2-4f3a-4b5c-6d7e8f9a1b2c
 # ╠═7a8b9c1d-e2f3-4a5b-6c7d-8e9f1a2b3c4d
@@ -662,6 +727,9 @@ end
 # ╠═742b17ab-27fc-418c-9265-522fde5235bb
 # ╠═1963d9dc-0cb9-4b8e-98ee-41491c6c784b
 # ╠═b3634a2f-6600-4480-b316-2a79af18653e
+# ╠═f301f5cf-0dc6-49d9-bd4d-ff117ea56a2e
+# ╠═06bac1d3-c340-49ce-bd7c-92164e412590
+# ╠═cd3ef36e-7150-47a5-9cec-9fa4d0e5779e
 # ╟─37d7c197-0a10-4145-ab85-b5a22eae273e
 # ╟─5248add6-0d0c-446d-8490-0ccc009fd6e9
 # ╟─8b9c1d2e-f3a4-5b6c-7d8e-9f1a2b3c4d5e

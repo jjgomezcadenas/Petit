@@ -93,11 +93,17 @@ end
 
 # ╔═╡ 4af9a3ef-e883-4bc3-a2f1-212102e4951b
 begin
-	xfile    = joinpath(cmdir, sdata)
+	#xfile    = joinpath(cmdir, sdata)
 end
+
+# ╔═╡ 9ea7167f-493b-4715-930e-3718a3dc6216
+xfile = "/Users/jjgomezcadenas/Data/HD5t/bi214_surface.h5"
 
 # ╔═╡ 5caa7c21-82e5-420b-b4e7-a0e33543b74b
 md"Read the DF? $(@bind readdf CheckBox(default=true))"
+
+# ╔═╡ c52c7194-dff1-4a97-ac62-8abdd4df2555
+
 
 # ╔═╡ 8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
 begin
@@ -119,6 +125,28 @@ md"""
 - energy of primary = $(round(1e+3*jn.Petit.energy_primary(partdf,1), digits=1)) keV
 """
 
+# ╔═╡ f84ad689-77ff-4641-9f07-1f04ef718ccc
+md"""
+### Find events with alpha particles
+"""
+
+# ╔═╡ e3d1ed4b-a388-4965-83e9-f21e18c318ec
+if occursin("bi214_surface", xfile) || occursin("tl208_surface", xfile) 
+	alphadf = jn.Petit.find_events_with_alphas(partdf)
+end
+
+# ╔═╡ e3ec7177-e78a-42b7-9f0a-d904af5395a1
+
+
+# ╔═╡ 49075c9c-7297-4226-ac34-88aeab6834e5
+if occursin("bi214_surface", xfile) || occursin("tl208_surface", xfile) 
+	md"""
+	#### Detection of alpha particles
+	- The plots above show where the apha particles were produced.  
+	- For the events kept in the DF, the alpha particles end up in the copper or steel and are not detected
+	"""
+end
+
 # ╔═╡ 144d60a3-d70f-442b-a252-76178fecdbf7
 md"""
 # Hits data frame
@@ -127,10 +155,75 @@ md"""
 # ╔═╡ 0fa67f2a-50a5-4c82-b42b-07f45f14e914
 hitsdf
 
+# ╔═╡ 4fb34131-0a18-453f-93c7-c31f34b959ce
+md"""
+#### Initial number of events in DF
+- These are events contained in the gas which deposit between 2300 and 2700 keV
+- number of events in DF =$(jn.Petit.number_of_events(hitsdf))
+"""
+
 # ╔═╡ 6624fb61-e8ac-41e5-a602-c8765e21cede
 md"""
 ## Hits global statistics
 """
+
+# ╔═╡ 19e48672-9ad7-405c-9706-60d4699bda2c
+begin
+h_y, p_y = jn.Petit.step_hist(hitsdf.y;
+         nbins = 50,
+         xlim   = (-2000.0, -1000.0),
+         xlabel = "Y (mm)",
+         ylabel = "Frequency",
+         title=" Y")
+
+	h_z, p_z = jn.Petit.step_hist(hitsdf.z;
+         nbins = 50,
+         xlim   = (-200.0, 200.0),
+         xlabel = "Z (mm)",
+         ylabel = "Frequency",
+         title=" Z ")
+	plot(p_y, p_z)
+end
+
+# ╔═╡ 5bcffb43-a8f7-448f-86c2-f3261d489bbf
+md""" 
+- Set the values of the fiducial cuts
+"""
+
+# ╔═╡ 35d5b13a-9769-410d-99bc-edd8e8cf15fb
+@bind xyc NumberField(1500.0:10.0:2000.0, default=1800.0)
+
+# ╔═╡ 490d05a8-a555-48d0-9e86-952e69ecaf8e
+@bind zc NumberField(50.0:1.0:150.0, default=100.0)
+
+# ╔═╡ ff6ef332-9b58-4dda-a997-489544d5636e
+begin
+	#xyc = 1800.0
+	#zc = 100.0
+md"""
+### Fiducial cuts
+- abs(x) < $(xyc)  
+- abs(y) < $(xyc)
+- abs(z) <$(zc)
+"""
+end
+
+# ╔═╡ 292c8f4c-5739-4b5a-8125-00a9a0ac626f
+begin
+	hitsdf2 = jn.Petit.filter_fiducial_events(hitsdf, xyc, zc)
+end
+
+# ╔═╡ 1b54761b-e05c-4384-8b43-c3e2ac32eb34
+jn.Petit.number_of_events(hitsdf2)
+
+# ╔═╡ cea5dce3-4fdc-445d-abdd-117334946199
+md"""
+#### After fiducial cut
+- number of events in DF =$(jn.Petit.number_of_events(hitsdf2))
+"""
+
+# ╔═╡ e1845fd0-9c43-48f7-a5f5-772f9ea50660
+hitsdf2
 
 # ╔═╡ 474b25f8-bd95-4389-867a-bb753dc77d45
 md"""
@@ -147,7 +240,7 @@ md"""
 
 
 # ╔═╡ 6c148761-f9e2-4c7d-8d50-ee78bc0a8baf
-evtdf = jn.Petit.get_event(hitsdf, nevent)
+evtdf = jn.Petit.get_event(hitsdf2, nevent)
 
 # ╔═╡ d1c1a8cb-a70e-480b-8f65-2cfa1a7022c3
 md"""
@@ -186,7 +279,7 @@ md"""
 @bind vsize NumberField(0.0:0.1:10.0, default=5.0)
 
 # ╔═╡ 8c929794-64a4-48eb-bd85-ccfad6133b1e
-vdf = jn.Petit.voxelize_hits(hitsdf, vsize)
+vdf = jn.Petit.voxelize_hits(hitsdf2, vsize)
 
 # ╔═╡ de61fd85-48cf-4c49-8abc-f929bdc4c3fc
 md"""
@@ -227,20 +320,6 @@ md"""
 # ╔═╡ 995555f1-dd99-4903-a3b7-9e48b62d675d
 trk_energy_kev(trks, trkid) = 1e+3 * round(sum(trks[trkid].voxels.energy), digits=3)
 
-# ╔═╡ 1362e7bf-0555-4551-9fcd-6047b7d9b555
-function make_tracks(vdf, nevent; max_dist=5.0, energy_thr=10.0)
-	tracks = jn.Petit.build_tracks(vdf, nevent, max_distance=max_dist, 
-								   energy_threshold=energy_thr)
-
-	if length(tracks) > 0
-        track_energies = [sum(track.voxels.energy) for track in tracks]
-        sorted_indices = sortperm(track_energies, rev=true)
-        tracks = tracks[sorted_indices]
-    end
-	
-	return tracks
-end
-
 # ╔═╡ 37110c55-a96e-4c4e-9ca1-9fb464865af0
 md"max distance (mm) $(@bind max_distance_mm NumberField(0.0:1000.0, default=10.0))" 
 
@@ -249,7 +328,7 @@ md"energy threshold (keV) $(@bind energy_threshold_kev NumberField(0.0:1000.0, d
 
 # ╔═╡ ceb6c086-fa7a-4265-92db-353b6380f184
 begin
-	trks = make_tracks(vdf, nevent;
+	trks = jn.Petit.make_tracks(vdf, nevent;
 						max_dist=max_distance_mm,
 						energy_thr=energy_threshold_kev)
 
@@ -353,7 +432,7 @@ md"Run analysis? $(@bind run_analysis CheckBox(default=false))"
 
 # ╔═╡ f1b3c4ef-1b0c-4243-be00-1b0a15b6f3a2
 if run_analysis
-	md"events to run $(@bind events_to_run NumberField(0:1000000, default=100))" 
+	md"events to run $(@bind events_to_run NumberField(0:1000000, default=1000))" 
 end
 
 # ╔═╡ 4d0c3fe4-5e76-441d-87c7-3a840791257c
@@ -362,7 +441,9 @@ if run_analysis
 					   events_to_run=events_to_run, 
 				 	   voxel_size_mm=vsize,
 				 	   max_distance_mm=max_distance_mm, 
-				       energy_threshold_kev=energy_threshold_kev)
+				       energy_threshold_kev=energy_threshold_kev,
+					   xyc=xyc,
+                       zc=zc)
 
 
   # Access statistics
@@ -458,12 +539,12 @@ begin
                    title ="Energy Primary")
 	plot(pe)
 end
-function histogram_energy_deposited(hitsdf)
+function histogram_energy_deposited(hitsdf; emin=2300.0, emax=2700.0)
 	energies = 1e+3*jn.Petit.energy_deposited(hitsdf)
 	_, pe = jn.Petit.step_hist(energies;
                    nbins = 50,
 				   logy=true, 
-                   xlim = (2300.0, 2700.0),
+                   xlim = (emin, emax),
                    xlabel = "energy (keV)",
                    ylabel = "Frequency",
                    title ="Energy Deposited")
@@ -471,11 +552,56 @@ function histogram_energy_deposited(hitsdf)
 end
 end
 
-# ╔═╡ f11e4543-26c4-4104-a177-27a5866c99f0
-histogram_energy_primary(partdf)
+# ╔═╡ f6726067-9bb6-44c1-bcdf-2959798e1ce2
+
+if occursin("bi214_copper", xfile) || occursin("tl208_copper", xfile)  || occursin("0nubb", xfile)
+	histogram_energy_primary(partdf)
+end
 
 # ╔═╡ bb097911-6b23-4e21-a3d7-65fffe2f3bf7
-histogram_energy_deposited(hitsdf)
+histogram_energy_deposited(hitsdf, emax=2800.0)
+
+# ╔═╡ 3984ae1a-f844-434d-841d-9a0f0557f85f
+histogram_energy_deposited(hitsdf2, emax=2800.0)
+
+# ╔═╡ beb867b5-711f-47ba-b6d1-c3a6e63dd6f1
+function histogram_alphas(df)
+	
+	h_x, p_x = jn.Petit.step_hist(df.x;
+         nbins = 50,
+         xlim   = (-2000.0, 2000.0),
+         xlabel = "X (mm)",
+         ylabel = "Frequency",
+         title=" X")
+
+	h_y, p_y = jn.Petit.step_hist(df.y;
+         nbins = 50,
+         xlim   = (-2000.0, 2000.0),
+         xlabel = "Y (mm)",
+         ylabel = "Frequency",
+         title=" Y")
+
+	h_z, p_z = jn.Petit.step_hist(df.z;
+         nbins = 50,
+         xlim   = (-2000.0, 2000.0),
+         xlabel = "Z (mm)",
+         ylabel = "Frequency",
+         title=" Z ")
+
+	h_e, p_e = jn.Petit.step_hist(1e+3*df.energy;
+         nbins = 50,
+         xlim   = (0.0, 8000.0),
+         xlabel = "energy (V)",
+         ylabel = "Frequency",
+         title=" E (keV) ")
+
+	plot(p_x, p_y, p_z, p_e)
+end
+
+# ╔═╡ 5502a45f-bba7-47b4-acad-6b14749fb4ed
+if occursin("bi214_surface", xfile) || occursin("tl208_surface", xfile) 
+	histogram_alphas(alphadf)
+end
 
 # ╔═╡ 33efdcc5-cc1d-48f4-81af-b5f65bb348f7
 function histogram_stats(hitsdf)
@@ -510,7 +636,7 @@ function histogram_stats(hitsdf)
 
 	h_z, p_z = jn.Petit.step_hist(hitsdf.z;
          nbins = 50,
-         xlim   = (0.0, 4000.0),
+         xlim   = (-2000.0, 2000.0),
          xlabel = "Z (mm)",
          ylabel = "Frequency",
          title=" Z ")
@@ -520,6 +646,9 @@ end
 
 # ╔═╡ e7771756-7cc6-45e7-8be5-98a3ec857cee
 histogram_stats(hitsdf)
+
+# ╔═╡ c1f44776-3eae-4006-bbf2-7280e60b8367
+histogram_stats(hitsdf2)
 
 # ╔═╡ 6fc13d23-cb44-40a6-a52d-32b81855d6a0
 function histogram_voxel_energy(df; emx=200.0, title="Voxel energy")
@@ -676,17 +805,36 @@ end
 # ╠═6c59aeae-7990-4b43-8378-0de210a3291a
 # ╠═ae89f5dc-e958-496a-91ac-0bd977355563
 # ╠═4af9a3ef-e883-4bc3-a2f1-212102e4951b
+# ╠═9ea7167f-493b-4715-930e-3718a3dc6216
 # ╠═5caa7c21-82e5-420b-b4e7-a0e33543b74b
+# ╠═c52c7194-dff1-4a97-ac62-8abdd4df2555
 # ╠═37a23226-4e3c-4e21-a4ee-a9aef75b2093
 # ╠═8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
 # ╠═07b4e4c1-0469-41ca-9890-bb4f990b4645
 # ╠═f60557f4-113e-44ab-ab53-56e967f8fda8
-# ╠═f11e4543-26c4-4104-a177-27a5866c99f0
+# ╠═f6726067-9bb6-44c1-bcdf-2959798e1ce2
+# ╠═f84ad689-77ff-4641-9f07-1f04ef718ccc
+# ╠═e3d1ed4b-a388-4965-83e9-f21e18c318ec
+# ╠═e3ec7177-e78a-42b7-9f0a-d904af5395a1
+# ╠═5502a45f-bba7-47b4-acad-6b14749fb4ed
+# ╠═49075c9c-7297-4226-ac34-88aeab6834e5
 # ╠═144d60a3-d70f-442b-a252-76178fecdbf7
 # ╠═bb097911-6b23-4e21-a3d7-65fffe2f3bf7
 # ╠═0fa67f2a-50a5-4c82-b42b-07f45f14e914
+# ╠═4fb34131-0a18-453f-93c7-c31f34b959ce
 # ╠═6624fb61-e8ac-41e5-a602-c8765e21cede
 # ╠═e7771756-7cc6-45e7-8be5-98a3ec857cee
+# ╠═19e48672-9ad7-405c-9706-60d4699bda2c
+# ╠═5bcffb43-a8f7-448f-86c2-f3261d489bbf
+# ╠═35d5b13a-9769-410d-99bc-edd8e8cf15fb
+# ╠═490d05a8-a555-48d0-9e86-952e69ecaf8e
+# ╠═ff6ef332-9b58-4dda-a997-489544d5636e
+# ╠═292c8f4c-5739-4b5a-8125-00a9a0ac626f
+# ╠═1b54761b-e05c-4384-8b43-c3e2ac32eb34
+# ╠═c1f44776-3eae-4006-bbf2-7280e60b8367
+# ╠═cea5dce3-4fdc-445d-abdd-117334946199
+# ╠═e1845fd0-9c43-48f7-a5f5-772f9ea50660
+# ╠═3984ae1a-f844-434d-841d-9a0f0557f85f
 # ╠═474b25f8-bd95-4389-867a-bb753dc77d45
 # ╠═6c58a746-da45-4e39-a178-91e060b2f34b
 # ╠═aa71c155-9bed-4ad6-963e-575100094a9c
@@ -712,7 +860,6 @@ end
 # ╠═9a89ffdc-3889-48c0-a952-ad2c36094b4c
 # ╠═a60ea1b2-1c4c-4565-ac34-d2580dd016e3
 # ╠═995555f1-dd99-4903-a3b7-9e48b62d675d
-# ╠═1362e7bf-0555-4551-9fcd-6047b7d9b555
 # ╠═37110c55-a96e-4c4e-9ca1-9fb464865af0
 # ╠═d115f04b-1cf2-47b4-81fd-d15aa8d6cd97
 # ╠═ceb6c086-fa7a-4265-92db-353b6380f184
@@ -746,6 +893,7 @@ end
 # ╠═0528e076-9994-472c-9d44-4d5b8c2af754
 # ╠═d0f9e26b-2a3c-42a4-a826-7c8694f5d470
 # ╠═e18e2427-5818-4d3a-9dd8-e715aad2958f
+# ╠═beb867b5-711f-47ba-b6d1-c3a6e63dd6f1
 # ╠═33efdcc5-cc1d-48f4-81af-b5f65bb348f7
 # ╠═6fc13d23-cb44-40a6-a52d-32b81855d6a0
 # ╠═2d4732eb-47b0-498b-b0ff-c9dcf3951ecd

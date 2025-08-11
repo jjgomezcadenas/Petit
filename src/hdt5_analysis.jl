@@ -24,13 +24,17 @@ end
 
 
 """
-    analysis_loop(hitsdf::DataFrame; events_to_run=1:100, voxel_size_mm=2.0, max_distance_mm=5.0, energy_threshold_kev=1.0)
+    analysis_loop(hitsdf::DataFrame; events_to_run=nothing, voxel_size_mm=2.0, max_distance_mm=5.0, energy_threshold_kev=1.0)
 
 Analyze multiple events to extract track energy distributions.
 
 # Arguments
 - `hitsdf::DataFrame`: DataFrame containing hit data
-- `events_to_run`: Range or collection of event IDs to process (default: 1:100)
+- `events_to_run`: Either:
+  - `nothing` (default): Process all unique event IDs in the DataFrame
+  - An integer: Process the first N unique event IDs
+  - A range (e.g., 1:100): Process event IDs in this range if they exist
+  - A vector of specific event IDs to process
 - `voxel_size_mm::Float64=2.0`: Voxel size in mm
 - `max_distance_mm::Float64=5.0`: Maximum distance for track clustering
 - `energy_threshold_kev::Float64=1.0`: Energy threshold in keV
@@ -39,10 +43,33 @@ Analyze multiple events to extract track energy distributions.
 - `AnalysisResults`: Struct containing energy arrays and statistics
 """
 function analysis_loop(hitsdf::DataFrame; 
-                      events_to_run=1:100, 
+                      events_to_run=nothing, 
                       voxel_size_mm::Float64=2.0,
                       max_distance_mm::Float64=5.0, 
                       energy_threshold_kev::Float64=1.0)
+    
+    # Get the actual event IDs from the DataFrame
+    unique_event_ids = sort(unique(hitsdf.event_id))
+    
+    # Determine which events to process
+    if events_to_run === nothing
+        # Process all events
+        event_ids_to_process = unique_event_ids
+    elseif isa(events_to_run, Integer)
+        # Process first N events
+        n_available = length(unique_event_ids)
+        n_to_process = min(events_to_run, n_available)
+        event_ids_to_process = unique_event_ids[1:n_to_process]
+    elseif isa(events_to_run, AbstractRange) || isa(events_to_run, AbstractVector)
+        # Process specific event IDs if they exist in the DataFrame
+        event_ids_to_process = filter(id -> id in unique_event_ids, collect(events_to_run))
+        if isempty(event_ids_to_process)
+            println("Warning: None of the requested event IDs exist in the DataFrame")
+            println("Available event IDs range from $(minimum(unique_event_ids)) to $(maximum(unique_event_ids))")
+        end
+    else
+        throw(ArgumentError("events_to_run must be nothing, an Integer, a Range, or a Vector"))
+    end
     
     # Initialize energy arrays with proper types
     single_tracks = TracksSummary()
@@ -59,13 +86,22 @@ function analysis_loop(hitsdf::DataFrame;
     n_events_processed = 0
     
     # Create progress bar
-    total_events = length(events_to_run)
+    total_events = length(event_ids_to_process)
+    if total_events == 0
+        println("No events to process")
+        return AnalysisResults(
+            single_tracks, two_track_primary, two_track_secondary,
+            three_track_primary, three_track_secondary,
+            0, 0, 0, 0, 0
+        )
+    end
+    
     progress = Progress(total_events, dt=0.5, 
                        desc="Processing events: ",
                        barglyphs=BarGlyphs('|','█', ['▁' ,'▂' ,'▃' ,'▄' ,'▅' ,'▆', '▇'],' ','|'),
                        barlen=50)
     
-    for nevent in events_to_run
+    for nevent in event_ids_to_process
         n_events_processed += 1
         
         try
@@ -156,228 +192,74 @@ function analysis_loop(hitsdf::DataFrame;
 end
 
 
-function event_loop(cmdir; input_file= "0nubb.next.h5",
-					   events_to_run=100, 
-				 	   voxel_size_mm=5,
-				 	   max_distance_mm=10, 
-				       energy_threshold_kev=10)
-	
-	xfile =joinpath(cmdir, input_file)
-	dfs = get_dataset_dfs(xfile)
-	hitsdf = dfs["hits"]
-	results = analysis_loop(hitsdf; 
-				 			events_to_run=1:events_to_run, 
-				 			voxel_size_mm,
-				 			max_distance_mm, 
-				 			energy_threshold_kev)
-	return results 
-	
+"""
+    event_loop(cmdir; input_file="0nubb.next.h5", events_to_run=100, voxel_size_mm=5, 
+               max_distance_mm=10, energy_threshold_kev=10, xyc=1800.0, zc=100.0)
+
+Process HDF5 data file through the full analysis pipeline with fiducial volume cuts.
+
+# Arguments
+- `cmdir`: Directory containing the input file
+- `input_file="0nubb.next.h5"`: Name of the HDF5 input file
+- `events_to_run=100`: Number of events to process
+- `voxel_size_mm=5`: Voxel size in mm for spatial discretization
+- `max_distance_mm=10`: Maximum distance in mm for connecting voxels into tracks
+- `energy_threshold_kev=10`: Minimum energy threshold in keV for including voxels
+- `xyc=1800.0`: Fiducial cut value for x and y coordinates (mm)
+- `zc=100.0`: Fiducial cut value for z coordinate (mm)
+
+# Returns
+- `AnalysisResults`: Analysis results with track statistics and energy distributions
+"""
+function event_loop(cmdir; input_file="0nubb.next.h5",
+                    events_to_run=100, 
+                    voxel_size_mm=5,
+                    max_distance_mm=10, 
+                    energy_threshold_kev=10,
+                    xyc::Float64=1800.0,
+                    zc::Float64=100.0)
+    
+    # Validate input parameters
+    if events_to_run <= 0
+        throw(ArgumentError("events_to_run must be positive, got $events_to_run"))
+    end
+    if voxel_size_mm <= 0
+        throw(ArgumentError("voxel_size_mm must be positive, got $voxel_size_mm"))
+    end
+    if max_distance_mm <= 0
+        throw(ArgumentError("max_distance_mm must be positive, got $max_distance_mm"))
+    end
+    if energy_threshold_kev < 0
+        throw(ArgumentError("energy_threshold_kev must be non-negative, got $energy_threshold_kev"))
+    end
+    
+    # Load data file
+    xfile = joinpath(cmdir, input_file)
+    if !isfile(xfile)
+        throw(ArgumentError("Input file not found: $xfile"))
+    end
+    
+    println("📁 Loading data from: $xfile")
+    dfs = get_dataset_dfs(xfile)
+    hitsdf = dfs["hits"]
+    
+    println("🔍 Applying fiducial volume cuts (xyc=$xyc, zc=$zc)")
+    hitsdf_fiducial = filter_fiducial_events(hitsdf, xyc, zc)
+    
+    # Get actual number of unique events after fiducial cuts
+    n_events_available = length(unique(hitsdf_fiducial.event_id))
+    println("📊 Found $n_events_available events after fiducial cuts")
+    
+    println("🔬 Starting analysis of up to $events_to_run events")
+    results = analysis_loop(hitsdf_fiducial; 
+                           events_to_run=events_to_run,  # Pass integer to process first N events
+                           voxel_size_mm,
+                           max_distance_mm, 
+                           energy_threshold_kev)
+    return results
 end
 
 
-"""
-    event_loop_pluto(cmdir; input_file="0nubb.next.h5", events_to_run=100, voxel_size_mm=5, max_distance_mm=10, energy_threshold_kev=10)
-
-Pluto notebook version of event_loop that shows progress inline in the notebook.
-Returns both results and a progress display function.
-
-# Usage in Pluto
-```julia
-results, progress_display = event_loop_pluto(cmdir; events_to_run=1000)
-progress_display  # This will show the final progress
-```
-"""
-function event_loop_pluto(cmdir; input_file= "0nubb.next.h5",
-					      events_to_run=100, 
-				 	      voxel_size_mm=5,
-				 	      max_distance_mm=10, 
-				          energy_threshold_kev=10)
-	
-	xfile = joinpath(cmdir, input_file)
-	dfs = get_dataset_dfs(xfile)
-	hitsdf = dfs["hits"]
-	
-	# Use the Pluto-specific analysis loop
-	results, progress_display = analysis_loop_pluto(hitsdf; 
-				 								    events_to_run=1:events_to_run, 
-				 								    voxel_size_mm,
-				 								    max_distance_mm, 
-				 								    energy_threshold_kev)
-	return results, progress_display
-end
-
-
-"""
-    analysis_loop_pluto(hitsdf::DataFrame; events_to_run=1:100, voxel_size_mm=2.0, max_distance_mm=5.0, energy_threshold_kev=1.0)
-
-Pluto notebook version of analysis_loop that returns both results and a progress display.
-"""
-function analysis_loop_pluto(hitsdf::DataFrame; 
-                             events_to_run=1:100, 
-                             voxel_size_mm::Float64=2.0,
-                             max_distance_mm::Float64=5.0, 
-                             energy_threshold_kev::Float64=1.0)
-    
-    # Initialize energy arrays with proper types
-    single_tracks = TracksSummary()
-    two_track_primary = TracksSummary()
-    two_track_secondary = TracksSummary()
-    three_track_primary = TracksSummary()
-    three_track_secondary = TracksSummary()
-    
-    # Initialize counters
-    n_single_track = 0
-    n_two_track = 0
-    n_three_plus_track = 0
-    n_failed = 0
-    n_events_processed = 0
-    
-    # Progress tracking for Pluto
-    total_events = length(events_to_run)
-    progress_updates = []
-    last_update_time = time()
-    
-    for nevent in events_to_run
-        n_events_processed += 1
-        
-        try
-            tracks = select_events(hitsdf, nevent; 
-                                 voxel_size_mm=voxel_size_mm, 
-                                 max_distance_mm=max_distance_mm, 
-                                 energy_threshold_kev=energy_threshold_kev)
-
-            if length(tracks) == 1
-                # Single track event
-                energy_kev = 1e+3 * sum(tracks[1].voxels.energy)
-                push!(single_tracks.energies, energy_kev)
-                push!(single_tracks.ids, nevent)
-                append!(single_tracks.xs, tracks[1].voxels.x)
-                append!(single_tracks.ys, tracks[1].voxels.y)
-                append!(single_tracks.zs, tracks[1].voxels.z)
-                n_single_track += 1
-                
-            elseif length(tracks) == 2 
-                # Two track event
-                primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
-                secondary_energy = 1e+3 * sum(tracks[2].voxels.energy)
-                push!(two_track_primary.energies, primary_energy)
-                push!(two_track_primary.ids, nevent)
-                append!(two_track_primary.xs, tracks[1].voxels.x)
-                append!(two_track_primary.ys, tracks[1].voxels.y)
-                append!(two_track_primary.zs, tracks[1].voxels.z)
-                push!(two_track_secondary.energies, secondary_energy)
-                push!(two_track_secondary.ids, nevent)
-                append!(two_track_secondary.xs, tracks[2].voxels.x)
-                append!(two_track_secondary.ys, tracks[2].voxels.y)
-                append!(two_track_secondary.zs, tracks[2].voxels.z)
-                n_two_track += 1
-                
-            elseif length(tracks) >= 3 
-                # Three or more track event
-                primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
-                push!(three_track_primary.energies, primary_energy)
-                push!(three_track_primary.ids, nevent)
-                append!(three_track_primary.xs, tracks[1].voxels.x)
-                append!(three_track_primary.ys, tracks[1].voxels.y)
-                append!(three_track_primary.zs, tracks[1].voxels.z)
-                for n in 2:length(tracks)
-                    secondary_energy = 1e+3 * sum(tracks[n].voxels.energy)
-                    push!(three_track_secondary.energies, secondary_energy)
-                    push!(three_track_secondary.ids, nevent)
-                    append!(three_track_secondary.xs, tracks[n].voxels.x)
-                    append!(three_track_secondary.ys, tracks[n].voxels.y)
-                    append!(three_track_secondary.zs, tracks[n].voxels.z)
-                end
-                n_three_plus_track += 1
-            end
-            
-        catch e
-            println("Warning: Error processing event $nevent: $e")
-            n_failed += 1
-        end
-        
-        # Update progress every 10 events or 2 seconds
-        current_time = time()
-        if n_events_processed % 10 == 0 || current_time - last_update_time > 2.0
-            progress_percent = round(100 * n_events_processed / total_events, digits=1)
-            push!(progress_updates, (
-                event = nevent,
-                processed = n_events_processed,
-                total = total_events,
-                percent = progress_percent,
-                single = n_single_track,
-                two = n_two_track,
-                three_plus = n_three_plus_track,
-                failed = n_failed,
-                time = current_time
-            ))
-            last_update_time = current_time
-        end
-    end
-    
-    # Final progress update (only if we processed events)
-    if n_events_processed > 0
-        last_event = isempty(events_to_run) ? 0 : last(events_to_run)
-        push!(progress_updates, (
-            event = last_event,
-            processed = n_events_processed,
-            total = total_events,
-            percent = 100.0,
-            single = n_single_track,
-            two = n_two_track,
-            three_plus = n_three_plus_track,
-            failed = n_failed,
-            time = time()
-        ))
-    end
-    
-    # Create progress display function
-    function create_progress_display()
-        if isempty(progress_updates)
-            return "No progress data available"
-        end
-        
-        final_update = progress_updates[end]
-        progress_bar_html = """
-        <div style="border: 1px solid #ddd; border-radius: 5px; padding: 10px; margin: 10px 0; background-color: #f9f9f9;">
-            <h4>📊 Analysis Progress Complete</h4>
-            <div style="background-color: #e9ecef; border-radius: 10px; height: 25px; margin: 10px 0;">
-                <div style="background-color: #28a745; height: 100%; border-radius: 10px; width: $(final_update.percent)%; 
-                           display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-                    $(final_update.percent)%
-                </div>
-            </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px;">
-                <div><strong>Events processed:</strong> $(final_update.processed) / $(final_update.total)</div>
-                <div><strong>Last event:</strong> $(final_update.event)</div>
-                <div><strong>Single tracks:</strong> $(final_update.single)</div>
-                <div><strong>Two tracks:</strong> $(final_update.two)</div>
-                <div><strong>Three+ tracks:</strong> $(final_update.three_plus)</div>
-                <div><strong>Failed:</strong> $(final_update.failed)</div>
-            </div>
-            <p style="margin-top: 10px; color: #28a745; font-weight: bold;">✅ Analysis completed successfully!</p>
-        </div>
-        """
-        # Return HTML string for Pluto to render
-        # In Pluto, this will be automatically converted to HTML
-        return progress_bar_html
-    end
-    
-    results = AnalysisResults(
-        single_tracks,
-        two_track_primary,
-        two_track_secondary,
-        three_track_primary,
-        three_track_secondary,
-        n_events_processed,
-        n_single_track,
-        n_two_track,
-        n_three_plus_track,
-        n_failed
-    )
-    
-    return results, create_progress_display
-end
 
 
 function histogram_results(ts::TracksSummary; 

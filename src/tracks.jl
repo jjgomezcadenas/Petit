@@ -71,3 +71,28 @@ function build_tracks(hitsdf::DataFrame, event_id::Int;
     return graphs
 end
 
+
+function make_tracks(vdf, nevent; max_dist=10.0, energy_thr=1.0)
+    """
+    Create tracks for a specific event using build_tracks function.
+    
+    Parameters:
+    - vdf: DataFrame with voxelized hits
+    - nevent: Event ID to process
+    - max_dist: Maximum distance for connecting voxels (mm)
+    - energy_thr: Energy threshold for voxels (keV)
+    
+    Returns:
+    - Vector of Tracks objects sorted by energy (highest first)
+    """
+    tracks = build_tracks(vdf, nevent; max_distance=max_dist, 
+                         energy_threshold=energy_thr)
+
+    if length(tracks) > 0
+        track_energies = [sum(track.voxels.energy) for track in tracks]
+        sorted_indices = sortperm(track_energies, rev=true)
+        tracks = tracks[sorted_indices]
+    end
+	
+    return tracks
+end
