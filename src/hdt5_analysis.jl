@@ -1,20 +1,9 @@
-struct TracksSummary
-    energies::Vector{Float64}
-    xs::Vector{Float64}
-    ys::Vector{Float64}
-    zs::Vector{Float64}
-    ids::Vector{Int}
-end
-
-# Constructor for empty TracksSummary
-TracksSummary() = TracksSummary(Float64[], Float64[], Float64[], Float64[], Int[])
-
 struct AnalysisResults
-    single_track::TracksSummary
-    two_track_primary::TracksSummary
-    two_track_secondary::TracksSummary
-    three_track_primary::TracksSummary
-    three_track_secondary::TracksSummary
+    single_track::DataFrame
+    two_track_primary::DataFrame
+    two_track_secondary::DataFrame
+    three_track_primary::DataFrame
+    three_track_secondary::DataFrame
     n_events_processed::Int
     n_single_track::Int
     n_two_track::Int
@@ -63,7 +52,8 @@ function analysis_loop(hitsdf::DataFrame;
     elseif isa(events_to_run, AbstractRange) || isa(events_to_run, AbstractVector)
         # Process specific event IDs if they exist in the DataFrame
         event_ids_to_process = filter(id -> id in unique_event_ids, collect(events_to_run))
-        if isempty(event_ids_to_process)
+        if isempty(event_ids_to_process) && !isempty(events_to_run)
+            # Only warn if we requested specific IDs that don't exist (not for empty input)
             println("Warning: None of the requested event IDs exist in the DataFrame")
             println("Available event IDs range from $(minimum(unique_event_ids)) to $(maximum(unique_event_ids))")
         end
@@ -71,12 +61,12 @@ function analysis_loop(hitsdf::DataFrame;
         throw(ArgumentError("events_to_run must be nothing, an Integer, a Range, or a Vector"))
     end
     
-    # Initialize energy arrays with proper types
-    single_tracks = TracksSummary()
-    two_track_primary = TracksSummary()
-    two_track_secondary = TracksSummary()
-    three_track_primary = TracksSummary()
-    three_track_secondary = TracksSummary()
+    # Initialize arrays to collect data for DataFrames
+    single_track_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
+    two_track_primary_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
+    two_track_secondary_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
+    three_track_primary_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
+    three_track_secondary_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
     
     # Initialize counters
     n_single_track = 0
@@ -89,9 +79,10 @@ function analysis_loop(hitsdf::DataFrame;
     total_events = length(event_ids_to_process)
     if total_events == 0
         println("No events to process")
+        # Return empty DataFrames
+        empty_df = DataFrame(event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
         return AnalysisResults(
-            single_tracks, two_track_primary, two_track_secondary,
-            three_track_primary, three_track_secondary,
+            empty_df, empty_df, empty_df, empty_df, empty_df,
             0, 0, 0, 0, 0
         )
     end
@@ -113,46 +104,64 @@ function analysis_loop(hitsdf::DataFrame;
             if length(tracks) == 1
                 # Single track event
                 energy_kev = 1e+3 * sum(tracks[1].voxels.energy)
-                push!(single_tracks.energies, energy_kev)
-                push!(single_tracks.ids, nevent)
-                append!(single_tracks.xs, tracks[1].voxels.x)
-                append!(single_tracks.ys, tracks[1].voxels.y)
-                append!(single_tracks.zs, tracks[1].voxels.z)
-
+                # Add data for each voxel in the track
+                for i in 1:nrow(tracks[1].voxels)
+                    push!(single_track_data.event_id, nevent)
+                    push!(single_track_data.energy, energy_kev)
+                    push!(single_track_data.x, tracks[1].voxels.x[i])
+                    push!(single_track_data.y, tracks[1].voxels.y[i])
+                    push!(single_track_data.z, tracks[1].voxels.z[i])
+                end
                 n_single_track += 1
                 
             elseif length(tracks) == 2 
                 # Two track event
                 primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
                 secondary_energy = 1e+3 * sum(tracks[2].voxels.energy)
-                push!(two_track_primary.energies, primary_energy)
-                push!(two_track_primary.ids, nevent)
-                append!(two_track_primary.xs, tracks[1].voxels.x)
-                append!(two_track_primary.ys, tracks[1].voxels.y)
-                append!(two_track_primary.zs, tracks[1].voxels.z)
-                push!(two_track_secondary.energies, secondary_energy)
-                push!(two_track_secondary.ids, nevent)
-                append!(two_track_secondary.xs, tracks[2].voxels.x)
-                append!(two_track_secondary.ys, tracks[2].voxels.y)
-                append!(two_track_secondary.zs, tracks[2].voxels.z)
+                
+                # Add primary track data
+                for i in 1:nrow(tracks[1].voxels)
+                    push!(two_track_primary_data.event_id, nevent)
+                    push!(two_track_primary_data.energy, primary_energy)
+                    push!(two_track_primary_data.x, tracks[1].voxels.x[i])
+                    push!(two_track_primary_data.y, tracks[1].voxels.y[i])
+                    push!(two_track_primary_data.z, tracks[1].voxels.z[i])
+                end
+                
+                # Add secondary track data
+                for i in 1:nrow(tracks[2].voxels)
+                    push!(two_track_secondary_data.event_id, nevent)
+                    push!(two_track_secondary_data.energy, secondary_energy)
+                    push!(two_track_secondary_data.x, tracks[2].voxels.x[i])
+                    push!(two_track_secondary_data.y, tracks[2].voxels.y[i])
+                    push!(two_track_secondary_data.z, tracks[2].voxels.z[i])
+                end
                 
                 n_two_track += 1
                 
             elseif length(tracks) >= 3 
                 # Three or more track event
                 primary_energy = 1e+3 * sum(tracks[1].voxels.energy)
-                push!(three_track_primary.energies, primary_energy)
-                push!(three_track_primary.ids, nevent)
-                append!(three_track_primary.xs, tracks[1].voxels.x)
-                append!(three_track_primary.ys, tracks[1].voxels.y)
-                append!(three_track_primary.zs, tracks[1].voxels.z)
+                
+                # Add primary track data
+                for i in 1:nrow(tracks[1].voxels)
+                    push!(three_track_primary_data.event_id, nevent)
+                    push!(three_track_primary_data.energy, primary_energy)
+                    push!(three_track_primary_data.x, tracks[1].voxels.x[i])
+                    push!(three_track_primary_data.y, tracks[1].voxels.y[i])
+                    push!(three_track_primary_data.z, tracks[1].voxels.z[i])
+                end
+                
+                # Add secondary tracks data
                 for n in 2:length(tracks)
                     secondary_energy = 1e+3 * sum(tracks[n].voxels.energy)
-                    push!(three_track_secondary.energies, secondary_energy)
-                    push!(three_track_secondary.ids, nevent)
-                    append!(three_track_secondary.xs, tracks[n].voxels.x)
-                    append!(three_track_secondary.ys, tracks[n].voxels.y)
-                    append!(three_track_secondary.zs, tracks[n].voxels.z)
+                    for i in 1:nrow(tracks[n].voxels)
+                        push!(three_track_secondary_data.event_id, nevent)
+                        push!(three_track_secondary_data.energy, secondary_energy)
+                        push!(three_track_secondary_data.x, tracks[n].voxels.x[i])
+                        push!(three_track_secondary_data.y, tracks[n].voxels.y[i])
+                        push!(three_track_secondary_data.z, tracks[n].voxels.z[i])
+                    end
                 end
                 n_three_plus_track += 1
             end
@@ -176,12 +185,53 @@ function analysis_loop(hitsdf::DataFrame;
     finish!(progress)
     println("✅ Analysis completed! Processed $n_events_processed events.")
     
+    # Create DataFrames from collected data
+    single_track_df = DataFrame(
+        event_id=single_track_data.event_id,
+        energy=single_track_data.energy,
+        x=single_track_data.x,
+        y=single_track_data.y,
+        z=single_track_data.z
+    )
+    
+    two_track_primary_df = DataFrame(
+        event_id=two_track_primary_data.event_id,
+        energy=two_track_primary_data.energy,
+        x=two_track_primary_data.x,
+        y=two_track_primary_data.y,
+        z=two_track_primary_data.z
+    )
+    
+    two_track_secondary_df = DataFrame(
+        event_id=two_track_secondary_data.event_id,
+        energy=two_track_secondary_data.energy,
+        x=two_track_secondary_data.x,
+        y=two_track_secondary_data.y,
+        z=two_track_secondary_data.z
+    )
+    
+    three_track_primary_df = DataFrame(
+        event_id=three_track_primary_data.event_id,
+        energy=three_track_primary_data.energy,
+        x=three_track_primary_data.x,
+        y=three_track_primary_data.y,
+        z=three_track_primary_data.z
+    )
+    
+    three_track_secondary_df = DataFrame(
+        event_id=three_track_secondary_data.event_id,
+        energy=three_track_secondary_data.energy,
+        x=three_track_secondary_data.x,
+        y=three_track_secondary_data.y,
+        z=three_track_secondary_data.z
+    )
+    
     return AnalysisResults(
-        single_tracks,
-        two_track_primary,
-        two_track_secondary,
-        three_track_primary,
-        three_track_secondary,
+        single_track_df,
+        two_track_primary_df,
+        two_track_secondary_df,
+        three_track_primary_df,
+        three_track_secondary_df,
         n_events_processed,
         n_single_track,
         n_two_track,
@@ -216,8 +266,8 @@ function event_loop(cmdir; input_file="0nubb.next.h5",
                     voxel_size_mm=5,
                     max_distance_mm=10, 
                     energy_threshold_kev=10,
-                    xyc::Float64=1800.0,
-                    zc::Float64=100.0)
+                    xyc::Float64=1950.0,
+                    zc::Float64=10.0)
     
     # Validate input parameters
     if events_to_run <= 0
@@ -262,17 +312,34 @@ end
 
 
 
-function histogram_results(ts::TracksSummary; 
+"""
+    histogram_results(df::DataFrame; nbins=50, xrange=(-2000.0, 2000.0), 
+                     yrange=(-2000.0, 2000.0), zrange=(0.0, 4000.0), erange=(0.0, 2700.0))
+
+Create histograms from a DataFrame containing track data.
+
+# Arguments
+- `df::DataFrame`: DataFrame with columns: event_id, energy, x, y, z
+- `nbins`: Number of bins for histograms
+- `xrange`, `yrange`, `zrange`, `erange`: Ranges for each histogram
+
+# Returns
+- Tuple of (h_x, h_y, h_z, h_e) histograms
+"""
+function histogram_results(df::DataFrame; 
                            nbins = 50,
                            xrange =  (-2000.0, 2000.0),
                            yrange =  (-2000.0, 2000.0),
                            zrange =  (0.0, 4000.0),
                            erange =  (0.0, 2700.0))
 	
-	h_x = hist1d(ts.xs; nbins = nbins, xlim  = xrange)
-	h_y = hist1d(ts.ys; nbins = nbins, xlim  = yrange)
-	h_z = hist1d(ts.zs; nbins = nbins, xlim  = zrange)
-	h_e = hist1d(ts.energies; nbins = nbins, xlim = erange )
+	# Extract unique energies per event (since energy is repeated for each voxel)
+	unique_energies = unique(select(df, [:event_id, :energy]))[:, :energy]
+	
+	h_x = hist1d(df.x; nbins = nbins, xlim  = xrange)
+	h_y = hist1d(df.y; nbins = nbins, xlim  = yrange)
+	h_z = hist1d(df.z; nbins = nbins, xlim  = zrange)
+	h_e = hist1d(unique_energies; nbins = nbins, xlim = erange )
 
 	return(h_x, h_y, h_z, h_e)
 end
@@ -389,57 +456,180 @@ end
 
 
 """
-    save_analysis_results(results::AnalysisResults, filename::String)
+    save_analysis_results(results::AnalysisResults, output_dir::String)
 
-Save an AnalysisResults structure to disk using Julia's built-in serialization.
+Save AnalysisResults to a directory containing:
+- DataFrames as HDF5 files (single_track.h5, two_track_primary.h5, etc.)
+- Metadata as JSON file (metadata.json)
 
 # Arguments
 - `results::AnalysisResults`: The results structure to save
-- `filename::String`: Path to the output file (should end with .jls)
+- `output_dir::String`: Directory path where files will be created
 
-# Example
-```julia
-results = event_loop(cmdir; events_to_run=1000)
-save_analysis_results(results, "analysis_results.jls")
+# Output Structure
+```
+output_dir/
+├── single_track.h5
+├── two_track_primary.h5  
+├── two_track_secondary.h5
+├── three_track_primary.h5
+├── three_track_secondary.h5
+└── metadata.json
 ```
 """
-function save_analysis_results(results::AnalysisResults, filename::String)
-    open(filename, "w") do io
-        Serialization.serialize(io, results)
+function save_analysis_results(results::AnalysisResults, output_dir::String)
+    # Create output directory if it doesn't exist
+    if !isdir(output_dir)
+        mkpath(output_dir)
+        println("Created directory: $output_dir")
     end
-    println("Analysis results saved to: $filename")
+    
+    # Save DataFrames as HDF5 files
+    track_types = [:single_track, :two_track_primary, :two_track_secondary, 
+                   :three_track_primary, :three_track_secondary]
+    
+    for track_type in track_types
+        df = getfield(results, track_type)
+        h5_file = joinpath(output_dir, "$(track_type).h5")
+        
+        # Save DataFrame to HDF5
+        h5open(h5_file, "w") do file
+            # Save each column as a dataset
+            if nrow(df) > 0
+                for col_name in names(df)
+                    file[string(col_name)] = df[!, col_name]
+                end
+                # Save column names and types as attributes
+                attrs(file)["column_names"] = collect(names(df))
+                attrs(file)["column_types"] = [string(eltype(df[!, col])) for col in names(df)]
+            else
+                # Handle empty DataFrames
+                attrs(file)["empty"] = true
+                attrs(file)["column_names"] = collect(names(df))
+                attrs(file)["column_types"] = [string(eltype(df[!, col])) for col in names(df)]
+            end
+        end
+    end
+    
+    # Save metadata as JSON
+    metadata = Dict(
+        "n_events_processed" => results.n_events_processed,
+        "n_single_track" => results.n_single_track,
+        "n_two_track" => results.n_two_track,
+        "n_three_plus_track" => results.n_three_plus_track,
+        "n_failed" => results.n_failed,
+        "format_version" => "1.0",
+        "created_at" => string(now())
+    )
+    
+    json_file = joinpath(output_dir, "metadata.json")
+    open(json_file, "w") do io
+        JSON.print(io, metadata, 2)  # Pretty print with 2-space indent
+    end
+    
+    println("Analysis results saved to directory: $output_dir")
+    println("Files created:")
+    for track_type in track_types
+        println("  - $(track_type).h5")
+    end
+    println("  - metadata.json")
 end
 
 
 """
-    load_analysis_results(filename::String) -> AnalysisResults
+    load_analysis_results(input_dir::String) -> AnalysisResults
 
-Load an AnalysisResults structure from disk using Julia's built-in serialization.
+Load AnalysisResults from a directory containing HDF5 and JSON files.
 
 # Arguments
-- `filename::String`: Path to the input file (should end with .jls)
+- `input_dir::String`: Directory path containing the analysis results files
+
+# Expected Structure
+```
+input_dir/
+├── single_track.h5
+├── two_track_primary.h5  
+├── two_track_secondary.h5
+├── three_track_primary.h5
+├── three_track_secondary.h5
+└── metadata.json
+```
 
 # Returns
-- `AnalysisResults`: The loaded results structure
+- `AnalysisResults`: The reconstructed results structure
 
 # Example
 ```julia
-results = load_analysis_results("analysis_results.jls")
+results = load_analysis_results("path/to/results_directory")
 println("Loaded results with \$(results.n_events_processed) events")
 ```
 """
-function load_analysis_results(filename::String)
-    if !isfile(filename)
-        error("File not found: $filename")
+function load_analysis_results(input_dir::String)
+    if !isdir(input_dir)
+        error("Directory not found: $input_dir")
     end
     
-    return open(filename, "r") do io
-        results = Serialization.deserialize(io)
-        if !isa(results, AnalysisResults)
-            error("File does not contain valid AnalysisResults data")
-        end
-        return results
+    # Load metadata
+    metadata_file = joinpath(input_dir, "metadata.json")
+    if !isfile(metadata_file)
+        error("Metadata file not found: $metadata_file")
     end
+    
+    metadata = JSON.parsefile(metadata_file)
+    
+    # Load DataFrames from HDF5 files
+    track_types = [:single_track, :two_track_primary, :two_track_secondary, 
+                   :three_track_primary, :three_track_secondary]
+    
+    loaded_dfs = Dict{Symbol, DataFrame}()
+    
+    for track_type in track_types
+        h5_file = joinpath(input_dir, "$(track_type).h5")
+        if !isfile(h5_file)
+            error("HDF5 file not found: $h5_file")
+        end
+        
+        # Load DataFrame from HDF5
+        h5open(h5_file, "r") do file
+            if haskey(attrs(file), "empty") && attrs(file)["empty"]
+                # Handle empty DataFrame
+                col_names = attrs(file)["column_names"]
+                col_types = attrs(file)["column_types"]
+                
+                # Create empty DataFrame with correct column types
+                df = DataFrame()
+                for (name, type_str) in zip(col_names, col_types)
+                    col_type = eval(Symbol(type_str))  # Convert string back to type
+                    df[!, Symbol(name)] = col_type[]
+                end
+                loaded_dfs[track_type] = df
+            else
+                # Load data from HDF5
+                col_names = attrs(file)["column_names"]
+                df_data = Dict()
+                
+                for col_name in col_names
+                    df_data[Symbol(col_name)] = read(file, col_name)
+                end
+                
+                loaded_dfs[track_type] = DataFrame(df_data)
+            end
+        end
+    end
+    
+    # Construct AnalysisResults
+    return AnalysisResults(
+        loaded_dfs[:single_track],
+        loaded_dfs[:two_track_primary],
+        loaded_dfs[:two_track_secondary],
+        loaded_dfs[:three_track_primary],
+        loaded_dfs[:three_track_secondary],
+        metadata["n_events_processed"],
+        metadata["n_single_track"],
+        metadata["n_two_track"],
+        metadata["n_three_plus_track"],
+        metadata["n_failed"]
+    )
 end
 
 

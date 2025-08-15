@@ -158,6 +158,144 @@ function filter_fiducial_events(hitsdf::DataFrame, xyc::Float64, zc::Float64)
 end
 
 
+"""
+    filter_radial(hitsdf::DataFrame, xc::Float64, yc::Float64)
+
+Filter events based on radial containment within a circle.
+
+An event passes the radial cut if ALL hits in that event satisfy:
+- sqrt(x^2 + y^2) < r, where r = sqrt(xc^2 + yc^2)
+
+This ensures all hits of an event are contained within a circle of radius r
+centered at the origin.
+
+# Arguments
+- `hitsdf::DataFrame`: DataFrame with columns event_id, x, y, z
+- `xc::Float64`: X-coordinate used to define radius (r = sqrt(xc^2 + yc^2))
+- `yc::Float64`: Y-coordinate used to define radius (r = sqrt(xc^2 + yc^2))
+
+# Returns
+- `DataFrame`: Events where all hits are within the radial cut
+
+# Example
+```julia
+# Filter events to keep only those with all hits within r=1800mm
+filtered_df = filter_radial(hitsdf, 1800.0, 0.0)
+
+# Filter with r = sqrt(1000^2 + 1000^2) ≈ 1414mm
+filtered_df = filter_radial(hitsdf, 1000.0, 1000.0)
+```
+"""
+function filter_radial(hitsdf::DataFrame, xc::Float64, yc::Float64)
+    # Calculate the radius from xc and yc
+    r = sqrt(xc^2 + yc^2)
+    
+    # Group by event_id and apply radial cuts
+    grouped_df = groupby(hitsdf, :event_id)
+    
+    result = combine(grouped_df, 
+        [:x, :y] => ((x, y) -> 
+            all(sqrt.(x.^2 .+ y.^2) .< r)  # All hits within radius r
+        ) => :passes_radial_cut
+    )
+    
+    # Get event IDs that pass the radial cut
+    passing_event_ids = result[result.passes_radial_cut, :event_id]
+    
+    # Filter original DataFrame to keep only passing events
+    filtered_df = filter(row -> row.event_id in passing_event_ids, hitsdf)
+    
+    return filtered_df
+end
+
+"""
+    filter_z(hitsdf::DataFrame, zil::Float64, zir::Float64, zol::Float64, zor::Float64)
+
+Filter events based on z-coordinate ranges.
+
+An event passes the z-coordinate filter if ALL hits in that event satisfy:
+- (z > zol && z < zil) OR (z > zir && z < zor)
+
+This creates two allowed z-ranges: (zol, zil) and (zir, zor). All hits of an event 
+must be within one or both of these ranges.
+
+# Arguments
+- `hitsdf::DataFrame`: DataFrame with columns event_id, x, y, z
+- `zil::Float64`: Inner left z boundary
+- `zir::Float64`: Inner right z boundary  
+- `zol::Float64`: Outer left z boundary
+- `zor::Float64`: Outer right z boundary
+
+# Returns
+- `DataFrame`: Events where all hits satisfy the z-coordinate conditions
+
+# Example
+```julia
+# Filter events to keep only those with hits in ranges (-200, -100) or (100, 200)
+filtered_df = filter_z(hitsdf, -100.0, 100.0, -200.0, 200.0)
+```
+"""
+function filter_z(hitsdf::DataFrame, zil::Float64, zir::Float64, zol::Float64, zor::Float64)
+    # Group by event_id and apply z cuts
+    grouped_df = groupby(hitsdf, :event_id)
+    
+    result = combine(grouped_df, 
+        [:z] => (z -> 
+            all((z .> zol .&& z .< zil) .| (z .> zir .&& z .< zor))  # All hits in allowed z ranges
+        ) => :passes_z_cut
+    )
+    
+    # Get event IDs that pass the z cut
+    passing_event_ids = result[result.passes_z_cut, :event_id]
+    
+    # Filter original DataFrame to keep only passing events
+    filtered_df = filter(row -> row.event_id in passing_event_ids, hitsdf)
+    
+    return filtered_df
+end
+
+"""
+    filter_short_tracks(hitsdf::DataFrame, trkl::Int)
+
+Filter events based on track length (number of hits per event).
+
+An event is kept only if its track length (number of hits) is >= trkl.
+Events with fewer hits than trkl are filtered out.
+
+# Arguments
+- `hitsdf::DataFrame`: DataFrame with columns event_id, x, y, z, energy
+- `trkl::Int`: Minimum track length (number of hits) required to keep an event
+
+# Returns
+- `DataFrame`: Events where the number of hits >= trkl
+
+# Example
+```julia
+# Keep only events with at least 10 hits
+filtered_df = filter_short_tracks(hitsdf, 10)
+
+# Keep only events with at least 5 hits
+filtered_df = filter_short_tracks(hitsdf, 5)
+```
+"""
+function filter_short_tracks(hitsdf::DataFrame, trkl::Int)
+    # Group by event_id and count the number of rows (hits) in each group
+    grouped_df = groupby(hitsdf, :event_id)
+    
+    # Calculate track length for each event
+    result = combine(grouped_df, nrow => :track_length)
+    
+    # Filter to keep only events with track_length >= trkl
+    passing_event_ids = result[result.track_length .>= trkl, :event_id]
+    
+    # Filter original DataFrame to keep only passing events
+    filtered_df = filter(row -> row.event_id in passing_event_ids, hitsdf)
+    
+    return filtered_df
+end
+
+
+
 function energy_primary(partdf::DataFrame, event_id::Int)
     # Get specific event
     event_particles = filter(:event_id => ==(event_id), partdf)

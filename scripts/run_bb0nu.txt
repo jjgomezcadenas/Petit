@@ -1,6 +1,0 @@
-input-file  "0nubb.h5"
-events  1000 
-voxel-size  2       
-max-distance    10
-energy-threshold    1 
-output-dir "znubb"

@@ -9,6 +9,7 @@ using Pkg
 Pkg.activate(dirname(@__DIR__))
 
 using Petit
+using DataFrames
 using Printf
 
 # Parse command line arguments
@@ -21,7 +22,7 @@ function parse_args(args)
         println("  --voxel-size=<mm>       Voxel size in mm (default: 5)")
         println("  --max-distance=<mm>     Max distance in mm (default: 10)")
         println("  --energy-threshold=<keV> Energy threshold in keV (default: 10)")
-        println("  --output-dir=<dir>      Output directory (default: znubb)")
+        println("  --output-dir=<dir>      Output base directory (default: AnalysisResults)")
         exit(1)
     end
     
@@ -30,10 +31,10 @@ function parse_args(args)
         :input_dir => args[1],
         :input_file => "0nubb.next.h5",
         :events_to_run => 100,
-        :voxel_size_mm => 5.0,
+        :voxel_size_mm => 2.0,
         :max_distance_mm => 10.0,
         :energy_threshold_kev => 10.0,
-        :output_dir => "znubb",
+        :output_dir => "AnalysisResults",
     )
     
     # Parse optional arguments
@@ -63,10 +64,19 @@ function main()
     # Parse command line arguments
     params = parse_args(ARGS)
     
-    # Create output directory if it doesn't exist
+    # Create base output directory if it doesn't exist
     if !isdir(params[:output_dir])
         mkpath(params[:output_dir])
-        println("Created output directory: $(params[:output_dir])")
+        println("Created base output directory: $(params[:output_dir])")
+    end
+    
+    # Generate specific output directory name based on input filename
+    input_basename = splitext(params[:input_file])[1]  # Remove .h5 extension
+    specific_output_dir = joinpath(params[:output_dir], input_basename)
+    
+    if !isdir(specific_output_dir)
+        mkpath(specific_output_dir)
+        println("Created specific output directory: $(specific_output_dir)")
     end
     
     # Print run parameters
@@ -77,13 +87,13 @@ function main()
     println("Voxel size: $(params[:voxel_size_mm]) mm")
     println("Max distance: $(params[:max_distance_mm]) mm")
     println("Energy threshold: $(params[:energy_threshold_kev]) keV")
-    println("Output directory: $(params[:output_dir])")
+    println("Base output directory: $(params[:output_dir])")
+    println("Specific output directory: $(specific_output_dir)")
     
-    # Show output filenames that will be generated
-    input_basename = splitext(params[:input_file])[1]
-    results_filename = input_basename * ".jls"
+    # Show output files that will be generated
     summary_filename = input_basename * "_summary.txt"
-    println("Output files: $(results_filename), $(summary_filename)")
+    println("Results will be saved to: $(specific_output_dir)/ (HDF5 + JSON files)")
+    println("Summary file: $(summary_filename)")
     println("==================================================\n")
     
     # Run the event loop
@@ -113,18 +123,13 @@ function main()
         println("Failed events: $(rsgn.n_failed)")
         println("Processing time: $(round(elapsed_time, digits=2)) seconds")
         
-        # Generate output filenames based on input filename
-        input_basename = splitext(params[:input_file])[1]  # Remove .h5 extension
-        results_filename = input_basename * ".jls"
-        summary_filename = input_basename * "_summary.txt"
-        
-        # Save the complete results structure to disk
-        results_file = joinpath(params[:output_dir], results_filename)
-        save_analysis_results(rsgn, results_file)
+        # Save the complete results structure to the specific directory
+        # (specific_output_dir was already created at the beginning)
+        save_analysis_results(rsgn, specific_output_dir)
         
         # Save a human-readable summary
         println("\nSaving summary statistics...")
-        summary_file = joinpath(params[:output_dir], summary_filename)
+        summary_file = joinpath(specific_output_dir, summary_filename)
         open(summary_file, "w") do io
             println(io, "Petit HDF5 Analysis Summary (Version 2)")
             println(io, "======================================")
@@ -145,27 +150,27 @@ function main()
             println(io, "")
             println(io, "Data Summary:")
             println(io, "-------------")
-            println(io, "Single track energies: $(length(rsgn.single_track.energies)) entries")
-            println(io, "Two track primary energies: $(length(rsgn.two_track_primary.energies)) entries")
-            println(io, "Two track secondary energies: $(length(rsgn.two_track_secondary.energies)) entries")
-            println(io, "Three+ track primary energies: $(length(rsgn.three_track_primary.energies)) entries")
-            println(io, "Three+ track secondary energies: $(length(rsgn.three_track_secondary.energies)) entries")
+            println(io, "Single track entries: $(nrow(rsgn.single_track)) rows")
+            println(io, "Two track primary entries: $(nrow(rsgn.two_track_primary)) rows")
+            println(io, "Two track secondary entries: $(nrow(rsgn.two_track_secondary)) rows")
+            println(io, "Three+ track primary entries: $(nrow(rsgn.three_track_primary)) rows")
+            println(io, "Three+ track secondary entries: $(nrow(rsgn.three_track_secondary)) rows")
             println(io, "")
             println(io, "Files Generated:")
             println(io, "---------------")
-            println(io, "Results structure: $(results_filename)")
+            println(io, "Results directory: $(specific_output_dir)/ (contains HDF5 + JSON files)")
             println(io, "Summary: $(summary_filename)")
             println(io, "")
             println(io, "Processing time: $(round(elapsed_time, digits=2)) seconds")
             println(io, "")
             println(io, "To load the results in Julia:")
             println(io, "using Petit")
-            println(io, "results = load_analysis_results(\"$(results_file)\")")
+            println(io, "results = load_analysis_results(\"$(specific_output_dir)\")")
         end
         println("Saved: $summary_file")
         
         println("\n=== Analysis Complete ===")
-        println("Results saved to: $results_file")
+        println("Results saved to: $specific_output_dir")
         println("Summary saved to: $summary_file")
         println("Total processing time: $(round(elapsed_time, digits=2)) seconds")
         println("=========================\n")
