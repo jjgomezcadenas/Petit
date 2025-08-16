@@ -388,7 +388,7 @@ md"""
 """
 
 # ╔═╡ 87705166-150b-4dea-903f-d2467dfe8d3b
-md" Energy ROI (low) -keV: $(@bind roi_xi NumberField(2400.0:2500.0, default=2440.0))"
+md" Energy ROI (low) -keV: $(@bind roi_xi NumberField(2400.0:5.0:2500.0, default=2440.0))"
 
 # ╔═╡ b426a406-6c4a-4965-8f79-6557ed624e4b
 md" Energy ROI (up) -keV: $(@bind roi_xu NumberField(2400.0:2500.0, default=2480.0))"
@@ -850,7 +850,7 @@ function plot_position_distributions(rznubb; xc=0.0, yc=0.0, zil=0.0, zir=0.0,
 
 # ╔═╡ d4892a5a-4488-4244-9513-8ece86d59661
 if load_znubb
-	plot_position_distributions(rznubb, xc=1300.0, yc=1300.0, zil=zil, zir=zir, 
+	plot_position_distributions(rznubb, xc=xr, yc=xr, zil=zil, zir=zir, 
                                      zol=zol, zor=zor)
 else
 	md"Load results to see position distributions."

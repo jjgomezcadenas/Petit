@@ -1,6 +1,7 @@
 using JSON
 using OrderedCollections
 using DataFrames
+using CSV
 
 """
 # List all .js files in the AnalysisSummary directory
@@ -338,4 +339,189 @@ function inspect_json_file(file_path::String)
     catch e
         return "Error reading file $file_path: $e"
     end
+end
+
+"""
+    read_activity_file(; hd5t_detector_file = "hd5t_detector_summary.csv")
+
+Read HD5t detector activity file and create a DataFrame with component names 
+matched to analysis component names.
+"""
+function read_activity_file(; hd5t_detector_file = "hd5t_detector_summary.csv")
+    
+    if isfile(hd5t_detector_file)
+        hd5t_raw = CSV.read(hd5t_detector_file, DataFrame)
+        
+        # Create mapping from HD5t component names to analysis component names
+        name_mapping = Dict(
+            "Barrel_Shield_Cu" => "bi214_copper_shell",
+            "Endcap_Shield_Left_Cu" => "bi214_copper_endcaps",
+            "Endcap_Shield_Right_Cu" => "bi214_copper_endcaps", # Will be combined
+            "Barrel_Teflon_PTFE" => "bi214_ptfe_barrel", 
+            "Endcap_Teflon_Left_PTFE" => "bi214_ptfe_endcap",
+            "Endcap_Teflon_Right_PTFE" => "bi214_ptfe_endcap", # Will be combined
+            "Central_Cathode_Fe316Ti" => "bi214_cathode_volume",
+            "Gas_Volume_Xe" => "gas_volume" # Not in background analysis
+        )
+        
+        # Create new dataframe with matched component names
+        hd5t_activities = DataFrame(
+            Component = String[],
+            Mass_kg = Float64[],
+            Total_Bi214_mBq = Float64[],
+            Total_Tl208_mBq = Float64[]
+        )
+        
+        # Process each component and combine where needed
+        for (hd5t_name, analysis_name) in name_mapping
+            if analysis_name in ["bi214_copper_endcaps", "bi214_ptfe_endcap"]
+                # These are combined components (left + right)
+                continue
+            end
+            
+            # Find the row in HD5t data
+            hd5t_row = findfirst(row -> row.Component == hd5t_name, eachrow(hd5t_raw))
+            if hd5t_row !== nothing
+                push!(hd5t_activities, (
+                    Component = analysis_name,
+                    Mass_kg = hd5t_raw[hd5t_row, :Mass_kg],
+                    Total_Bi214_mBq = hd5t_raw[hd5t_row, :Total_Bi214_mBq],
+                    Total_Tl208_mBq = hd5t_raw[hd5t_row, :Total_Tl208_mBq]
+                ))
+            end
+        end
+        
+        # Handle combined components
+        # Copper endcaps (left + right)
+        left_endcap = findfirst(row -> row.Component == "Endcap_Shield_Left_Cu", eachrow(hd5t_raw))
+        right_endcap = findfirst(row -> row.Component == "Endcap_Shield_Right_Cu", eachrow(hd5t_raw))
+        if left_endcap !== nothing && right_endcap !== nothing
+            push!(hd5t_activities, (
+                Component = "bi214_copper_endcaps",
+                Mass_kg = hd5t_raw[left_endcap, :Mass_kg] + hd5t_raw[right_endcap, :Mass_kg],
+                Total_Bi214_mBq = hd5t_raw[left_endcap, :Total_Bi214_mBq] + hd5t_raw[right_endcap, :Total_Bi214_mBq],
+                Total_Tl208_mBq = hd5t_raw[left_endcap, :Total_Tl208_mBq] + hd5t_raw[right_endcap, :Total_Tl208_mBq]
+            ))
+        end
+        
+        # PTFE endcaps (left + right)
+        left_ptfe = findfirst(row -> row.Component == "Endcap_Teflon_Left_PTFE", eachrow(hd5t_raw))
+        right_ptfe = findfirst(row -> row.Component == "Endcap_Teflon_Right_PTFE", eachrow(hd5t_raw))
+        if left_ptfe !== nothing && right_ptfe !== nothing
+            push!(hd5t_activities, (
+                Component = "bi214_ptfe_endcap",
+                Mass_kg = hd5t_raw[left_ptfe, :Mass_kg] + hd5t_raw[right_ptfe, :Mass_kg],
+                Total_Bi214_mBq = hd5t_raw[left_ptfe, :Total_Bi214_mBq] + hd5t_raw[right_ptfe, :Total_Bi214_mBq],
+                Total_Tl208_mBq = hd5t_raw[left_ptfe, :Total_Tl208_mBq] + hd5t_raw[right_ptfe, :Total_Tl208_mBq]
+            ))
+        end
+        
+        return hd5t_activities
+    else
+        @error "HD5t detector summary file not found: $hd5t_detector_file"
+        return DataFrame()
+    end
+end
+
+"""
+    nof_year(selection_eff, hd5t_activities)
+
+Calculate number of events per year (both produced and selected) for each component.
+
+# Arguments
+- `selection_eff`: DataFrame with Component and sel_eff columns
+- `hd5t_activities`: DataFrame with Component, Total_Bi214_mBq, Total_Tl208_mBq columns
+
+# Returns
+DataFrame with columns:
+- Component: Component name
+- events_year_bi214: Bi-214 events per year (total)
+- events_year_tl208: Tl-208 events per year (total)  
+- events_year_sel_bi214: Selected Bi-214 events per year
+- events_year_sel_tl208: Selected Tl-208 events per year
+"""
+function nof_year(selection_eff, hd5t_activities)
+    # Constants
+    SECONDS_PER_YEAR = 365.25 * 24 * 3600  # Including leap years
+    mBq_TO_Bq = 1e-3  # Conversion from mBq to Bq
+    
+    # Create events per year dataframe
+    events_year = DataFrame(
+        Component = String[],
+        events_year_bi214 = Float64[],
+        events_year_tl208 = Float64[],
+        events_year_sel_bi214 = Float64[],
+        events_year_sel_tl208 = Float64[]
+    )
+    
+    # Process each component
+    for comp in selection_eff.Component
+        # Find matching efficiency
+        eff_row = findfirst(row -> row.Component == comp, eachrow(selection_eff))
+        sel_efficiency = eff_row !== nothing ? selection_eff[eff_row, :sel_eff] : 0.0
+        
+        # Find matching activities
+        act_row = findfirst(row -> row.Component == comp, eachrow(hd5t_activities))
+        
+        if act_row !== nothing
+            # Get activities in mBq and convert to Bq/s
+            bi214_activity_bq = hd5t_activities[act_row, :Total_Bi214_mBq] * mBq_TO_Bq
+            tl208_activity_bq = hd5t_activities[act_row, :Total_Tl208_mBq] * mBq_TO_Bq
+            
+            # Calculate events per year (activity in Bq = decays/s)
+            events_bi214_year = bi214_activity_bq * SECONDS_PER_YEAR
+            events_tl208_year = tl208_activity_bq * SECONDS_PER_YEAR
+            
+            # Calculate selected events per year
+            events_sel_bi214_year = events_bi214_year * sel_efficiency
+            events_sel_tl208_year = events_tl208_year * sel_efficiency
+            
+            # Add to dataframe
+            push!(events_year, (
+                Component = comp,
+                events_year_bi214 = events_bi214_year,
+                events_year_tl208 = events_tl208_year,
+                events_year_sel_bi214 = events_sel_bi214_year,
+                events_year_sel_tl208 = events_sel_tl208_year
+            ))
+        else
+            # Component not found in activities, add zeros
+            push!(events_year, (
+                Component = comp,
+                events_year_bi214 = 0.0,
+                events_year_tl208 = 0.0,
+                events_year_sel_bi214 = 0.0,
+                events_year_sel_tl208 = 0.0
+            ))
+        end
+    end
+    
+    # Add totals row
+    push!(events_year, (
+        Component = "TOTAL",
+        events_year_bi214 = sum(events_year.events_year_bi214),
+        events_year_tl208 = sum(events_year.events_year_tl208),
+        events_year_sel_bi214 = sum(events_year.events_year_sel_bi214),
+        events_year_sel_tl208 = sum(events_year.events_year_sel_tl208)
+    ))
+    
+    return events_year  # Fixed: was 'event_year' in original code
+end
+
+"""
+    get_selection_efficiencies(comparison_df)
+
+Extract selection efficiencies from comparison DataFrame.
+
+# Arguments
+- `comparison_df`: DataFrame with DataType and Total columns
+
+# Returns
+DataFrame with Component and sel_eff columns
+"""
+function get_selection_efficiencies(comparison_df)
+    return DataFrame(
+        Component = comparison_df.DataType,
+        sel_eff = comparison_df.Total
+    )
 end

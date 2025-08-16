@@ -20,6 +20,7 @@ end
 begin
 	using PlutoUI
 	using DataFrames
+	using CSV
 	using Printf
 	using Markdown
 	using InteractiveUtils
@@ -40,7 +41,7 @@ PlutoUI.TableOfContents(title="HD5t Summary Analysis", indent=true)
 # ╔═╡ 871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
 begin
 	pdir = joinpath(ENV["PROJECTS"], "Petit")
-	summary_dir = joinpath(pdir, "pluto", "AnalysisSummary")
+	summary_dir = joinpath(pdir, "AnalysisSummary")
 end
 
 # ╔═╡ c17d78d1-39a1-40da-a3bc-d0a8717a4e10
@@ -56,6 +57,9 @@ md"""
 
 This notebook reads and displays the analysis summaries from JSON files.
 """
+
+# ╔═╡ 1629b0c1-64a3-4b6e-b24b-45f423f8a66b
+summary_dir
 
 # ╔═╡ b97eb6e0-40d9-4de8-bc0b-c2b1469cabab
 md"""
@@ -206,8 +210,54 @@ comparison_df
 
 # ╔═╡ f301f5cf-0dc6-49d9-bd4d-ff117ea56a2e
 md"""
-## Export Combined Summary
+## Compute Backgrounds
 """
+
+# ╔═╡ 8d10058a-ad7e-411a-898a-5910450ccd78
+md"""
+### Obtain selection efficiencies
+
+"""
+
+# ╔═╡ a1b2c3d4-5678-9abc-def0-123456789abc
+if @isdefined(comparison_df)
+	selection_eff = DataFrame(
+		Component = comparison_df.DataType,
+		sel_eff = comparison_df.Total
+	)
+	
+	md"""
+	### Selection Efficiencies
+	
+	$(selection_eff)
+	"""
+else
+	md"No comparison_df available yet"
+end
+
+# ╔═╡ 7e81a3ed-4888-45f7-9d61-551aa11d64a4
+md"""
+### Read activity file
+
+"""
+
+# ╔═╡ 74c204fa-eb02-47b5-95fe-39da7e406bdb
+hd5t_activities = read_activity_file()
+
+# ╔═╡ 81d08904-154e-4234-a81b-eb7118838133
+md"""
+### Compute events per year: produced and selected. 
+
+"""
+
+# ╔═╡ a6cc62d9-2dff-452e-bac2-df5711097bc0
+evt_year = nof_year(selection_eff, hd5t_activities)
+
+# ╔═╡ b2c3d4e5-6789-abcd-ef01-23456789abcd
+n_bi214_y_ton_roi = evt_year[13,"events_year_sel_bi214"]/4.5
+
+# ╔═╡ c3d4e5f6-789a-bcde-f012-3456789abcde
+n_tl208_y = evt_year[13,"events_year_sel_tl208"]/4.5
 
 # ╔═╡ Cell order:
 # ╠═04b446d6-f34f-11ed-2565-0b15d65b6781
@@ -217,6 +267,7 @@ md"""
 # ╠═c9fc0547-0e73-4629-9909-e59c3d75169d
 # ╠═16a23b13-537b-45dd-b90f-7220e3d969d9
 # ╠═eb8abbaf-6d7a-45e6-85ce-5ac5bc6dcfe7
+# ╠═1629b0c1-64a3-4b6e-b24b-45f423f8a66b
 # ╟─b97eb6e0-40d9-4de8-bc0b-c2b1469cabab
 # ╠═3f2262a1-33e5-4fe2-a1ef-c03df3d1aa4b
 # ╟─8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
@@ -228,3 +279,11 @@ md"""
 # ╠═0e156010-ce22-40b0-a6fd-e57f8ca503a3
 # ╠═90bc6dd6-2904-4b16-9419-f9fc8147772c
 # ╠═f301f5cf-0dc6-49d9-bd4d-ff117ea56a2e
+# ╠═8d10058a-ad7e-411a-898a-5910450ccd78
+# ╠═a1b2c3d4-5678-9abc-def0-123456789abc
+# ╠═7e81a3ed-4888-45f7-9d61-551aa11d64a4
+# ╠═74c204fa-eb02-47b5-95fe-39da7e406bdb
+# ╠═81d08904-154e-4234-a81b-eb7118838133
+# ╠═a6cc62d9-2dff-452e-bac2-df5711097bc0
+# ╠═b2c3d4e5-6789-abcd-ef01-23456789abcd
+# ╠═c3d4e5f6-789a-bcde-f012-3456789abcde

@@ -30,3 +30,16 @@ backup.jl
 
 # Local environment files
 LocalPreferences.toml
+AnalysisResults/
+AnalysisSummary/
+pluto/AnalysisSummary/
+pluto/analysis_results.txt
+pluto/comparison_df.csv
+pluto/compatibility_fix.jl
+pluto/event_counts.txt
+pluto/hd5t_detector_summary.csv
+scripts/AnalysisSummary/
+test_collection.txt
+test_hist.txt
+test_output/
+znubb/
