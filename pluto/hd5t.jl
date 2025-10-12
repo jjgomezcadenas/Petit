@@ -18,6 +18,7 @@ end
 
 # ╔═╡ 349825ff-7ffe-4fa1-ba26-a772041f0323
 begin
+	using Revise
 	using PlutoUI
 	using CSV
 	using DataFrames
@@ -97,13 +98,10 @@ begin
 end
 
 # ╔═╡ 9ea7167f-493b-4715-930e-3718a3dc6216
-xfile = "/Users/jjgomezcadenas/Data/HD5t/bi214_surface.h5"
+xfile = "/Users/jjgomezcadenas/Data/HD5t/precdr/copperbkg/bi214/bi214_copper_endcaps_1.next.h5"
 
 # ╔═╡ 5caa7c21-82e5-420b-b4e7-a0e33543b74b
 md"Read the DF? $(@bind readdf CheckBox(default=true))"
-
-# ╔═╡ c52c7194-dff1-4a97-ac62-8abdd4df2555
-
 
 # ╔═╡ 8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
 begin
@@ -239,6 +237,9 @@ md"""
 @bind nevent NumberField(0:1000000, default=1)
 
 
+# ╔═╡ 264be000-9352-4a3d-9238-384da3c06053
+unique(hitsdf2.event_id)
+
 # ╔═╡ 6c148761-f9e2-4c7d-8d50-ee78bc0a8baf
 evtdf = jn.Petit.get_event(hitsdf2, nevent)
 
@@ -276,7 +277,7 @@ md"""
 """
 
 # ╔═╡ 5248add6-0d0c-446d-8490-0ccc009fd6e9
-@bind vsize NumberField(0.0:0.1:10.0, default=5.0)
+@bind vsize NumberField(0.0:0.1:10.0, default=3.0)
 
 # ╔═╡ 8c929794-64a4-48eb-bd85-ccfad6133b1e
 vdf = jn.Petit.voxelize_hits(hitsdf2, vsize)
@@ -419,8 +420,29 @@ else
 	  """
 end
 
-# ╔═╡ 8fffd455-cf05-4a4c-b99e-7f81a2926373
+# ╔═╡ 727fa030-3d24-4864-9df1-ee157da78d20
+begin
+	result = jn.Petit.walk_track_from_extremes(trks[1])
+	start_voxel, end_voxel = result.extremes
+	start_voxel, end_voxel = result.extremes
+  	path = result.path_indices
+  	ordered_voxels = result.path_voxels
+  	track_length = result.total_length
 
+	md"""
+	### Find track Extremes
+	- start voxel: x = $(start_voxel.x), y = $(start_voxel.y), z = $(start_voxel.z)
+	- end voxel: x = $(end_voxel.x), y = $(end_voxel.y), z = $(end_voxel.z)
+	- track length L =$(track_length)
+	"""
+end
+
+# ╔═╡ 0ba05450-c601-4c3e-8147-74c35c6ef997
+jn.Petit.plot_track_with_extremes(trks[1], result;
+                                 markersize_voxels=4.0,
+                                 markersize_extremes=10.0,
+                                 show_connections=false,
+                                 alpha_connections=0.3)
 
 # ╔═╡ 38cb58a7-a752-4d9e-bda9-afa14a9bcf5c
 md"""
@@ -434,6 +456,9 @@ md"Run analysis? $(@bind run_analysis CheckBox(default=false))"
 if run_analysis
 	md"events to run $(@bind events_to_run NumberField(0:1000000, default=1000))" 
 end
+
+# ╔═╡ 8af4e9c9-2cdc-417d-b681-2647ba807b86
+xfile
 
 # ╔═╡ 4d0c3fe4-5e76-441d-87c7-3a840791257c
 if run_analysis
@@ -457,6 +482,9 @@ if run_analysis
 	"""
   
 end
+
+# ╔═╡ 25533234-5ebf-409e-a6fa-4f52e9a4ac00
+results
 
 # ╔═╡ 7f94b90d-3955-4cb0-b2f4-fd37b66d3b20
 deb = false
@@ -772,11 +800,6 @@ function get_subgroups(filename::String, path::String = "/")
     end
 end
 
-# ╔═╡ 37a23226-4e3c-4e21-a4ee-a9aef75b2093
-if readdf
-	get_subgroups(xfile)
-end
-
 # ╔═╡ bbc7767d-2ab4-40ff-ad2a-e1f81b6ad368
 function inspect_mc(filename::String)
     h5open(filename, "r") do fid
@@ -789,16 +812,46 @@ function inspect_mc(filename::String)
     end
 end
 
+# ╔═╡ f436311b-b47a-486b-aed0-170c6b7dbc94
+function inspect_mc2(filename::String)
+    h5open(filename, "r") do fid
+        dset = fid["MC"]
+        println("Type: ", typeof(dset))
+        data = read(dset)
+        println("Read type: ", typeof(data))
+        println("First element: ", data[1])
+        return data
+    end
+end
+
 # ╔═╡ 59c673be-1ead-488c-84bd-21bf14980313
+inspect_mc(xfile)
 
+# ╔═╡ 2019c5f3-b700-4dc4-bc95-06f8cb1e966a
+h5open(xfile, "r") do fid
+      config_array = read(fid["MC/configuration"])
+      param_value = config_array[2].param_value  # Assuming structured array
+  end
 
-# ╔═╡ 70914efe-c290-4f43-8c2a-f521281c977e
+# ╔═╡ ae3fb816-c8cb-4b37-abf7-e3a978045c2d
+function nof_events(xfile)
+	
+	fid = h5open(xfile, "r") 
+    config_array = read(fid["MC/configuration"])
+    param_value = config_array[2].param_value  # Assuming structured array
+	return parse(Int, param_value)
+end
+
+# ╔═╡ c52c7194-dff1-4a97-ac62-8abdd4df2555
+nof = nof_events(xfile)
+
+# ╔═╡ 71b5e9cc-94d7-4fcf-8498-6e422d4e8416
 
 
 # ╔═╡ Cell order:
+# ╠═947c237c-9852-40e9-a83f-c23666db90aa
 # ╠═04b446d6-f34f-11ed-2565-0b15d65b6781
 # ╠═871bd8bf-8e4b-40fb-a9c7-fdeb47589c5a
-# ╠═947c237c-9852-40e9-a83f-c23666db90aa
 # ╠═349825ff-7ffe-4fa1-ba26-a772041f0323
 # ╠═7504d7aa-a780-4956-99a5-08a7f9a462b2
 # ╠═c9fc0547-0e73-4629-9909-e59c3d75169d
@@ -808,7 +861,6 @@ end
 # ╠═9ea7167f-493b-4715-930e-3718a3dc6216
 # ╠═5caa7c21-82e5-420b-b4e7-a0e33543b74b
 # ╠═c52c7194-dff1-4a97-ac62-8abdd4df2555
-# ╠═37a23226-4e3c-4e21-a4ee-a9aef75b2093
 # ╠═8a55b4a3-5cbf-48c3-b150-2bd4ad73f440
 # ╠═07b4e4c1-0469-41ca-9890-bb4f990b4645
 # ╠═f60557f4-113e-44ab-ab53-56e967f8fda8
@@ -838,6 +890,7 @@ end
 # ╠═474b25f8-bd95-4389-867a-bb753dc77d45
 # ╠═6c58a746-da45-4e39-a178-91e060b2f34b
 # ╠═aa71c155-9bed-4ad6-963e-575100094a9c
+# ╠═264be000-9352-4a3d-9238-384da3c06053
 # ╠═6c148761-f9e2-4c7d-8d50-ee78bc0a8baf
 # ╠═d1c1a8cb-a70e-480b-8f65-2cfa1a7022c3
 # ╠═272c88a5-c6c0-41e1-b782-f8e23007eefc
@@ -875,11 +928,14 @@ end
 # ╠═d98ea3d5-22bd-480d-9218-80cc7220bc07
 # ╠═d84ed988-a09e-4c80-86d8-89eb1c9d77e0
 # ╠═59c79d07-52a7-482e-b4f8-f29a28401b8a
-# ╠═8fffd455-cf05-4a4c-b99e-7f81a2926373
+# ╠═727fa030-3d24-4864-9df1-ee157da78d20
+# ╠═0ba05450-c601-4c3e-8147-74c35c6ef997
 # ╠═38cb58a7-a752-4d9e-bda9-afa14a9bcf5c
 # ╠═149507ef-73e4-43a9-8623-8b3d65bef952
 # ╠═f1b3c4ef-1b0c-4243-be00-1b0a15b6f3a2
+# ╠═8af4e9c9-2cdc-417d-b681-2647ba807b86
 # ╠═4d0c3fe4-5e76-441d-87c7-3a840791257c
+# ╠═25533234-5ebf-409e-a6fa-4f52e9a4ac00
 # ╠═faa0ee0d-447e-43f8-8ebd-d3e6c3c1df24
 # ╠═7f94b90d-3955-4cb0-b2f4-fd37b66d3b20
 # ╠═84eac452-abc3-4570-9e58-791b75aa5041
@@ -902,5 +958,8 @@ end
 # ╠═46d3b837-c9df-4e04-98ae-611054c9ad6d
 # ╠═a4d68f10-b2f3-4b48-b3d0-2baac6f93ca1
 # ╠═bbc7767d-2ab4-40ff-ad2a-e1f81b6ad368
+# ╠═f436311b-b47a-486b-aed0-170c6b7dbc94
 # ╠═59c673be-1ead-488c-84bd-21bf14980313
-# ╠═70914efe-c290-4f43-8c2a-f521281c977e
+# ╠═2019c5f3-b700-4dc4-bc95-06f8cb1e966a
+# ╠═ae3fb816-c8cb-4b37-abf7-e3a978045c2d
+# ╠═71b5e9cc-94d7-4fcf-8498-6e422d4e8416

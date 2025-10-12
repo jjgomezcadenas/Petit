@@ -11,6 +11,7 @@ export hist1d, hist2d, p1df, step_hist, in_range, get_histo1d, Histo1d
 export scan_level, get_vals_from_sparse
 export save_histo1d, load_histo1d
 export save_histos, load_histos
+export centers, edges
 
 include("util.jl")
 
@@ -83,6 +84,13 @@ Calculate the bin centers from a vector of bin edges
 function centers(edges::Vector{<:Real})
     edges[1:end-1] + .-(@view(edges[2:end]), @view(edges[1:end-1])) / 2
 end
+
+"""
+    centers(h::Histo1d)
+
+Return the centers of a Histo1d object
+"""
+centers(h::Histo1d) = h.centers
 
 
 """

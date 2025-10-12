@@ -1,0 +1,486 @@
+"""
+Functions for saving and loading Tracks objects to/from disk.
+"""
+
+using CSV
+using JSON
+using Serialization
+
+function save_track_csv(track::Tracks, filename::String)
+    """
+    Save a track to CSV files (voxels and graph structure).
+    Creates two files: filename_voxels.csv and filename_graph.json
+
+    Parameters:
+    - track: Tracks object to save
+    - filename: Base filename (without extension)
+    """
+    # Save voxels as CSV
+    voxels_file = filename * "_voxels.csv"
+    CSV.write(voxels_file, track.voxels)
+
+    # Save graph structure as JSON
+    graph_file = filename * "_graph.json"
+
+    # Convert graph to edge list
+    edge_list = []
+    for edge in edges(track.graph)
+        push!(edge_list, [src(edge), dst(edge)])
+    end
+
+    graph_data = Dict(
+        "n_vertices" => nv(track.graph),
+        "edges" => edge_list,
+        "components" => track.components
+    )
+
+    open(graph_file, "w") do f
+        JSON.print(f, graph_data, 2)
+    end
+
+    println("Track saved to:")
+    println("  Voxels: $voxels_file")
+    println("  Graph: $graph_file")
+end
+
+function load_track_csv(filename::String)
+    """
+    Load a track from CSV files.
+
+    Parameters:
+    - filename: Base filename (without extension)
+
+    Returns:
+    - Tracks object
+    """
+    # Load voxels
+    voxels_file = filename * "_voxels.csv"
+    voxels = CSV.read(voxels_file, DataFrame)
+
+    # Load graph structure
+    graph_file = filename * "_graph.json"
+    graph_data = JSON.parsefile(graph_file)
+
+    # Reconstruct graph
+    n_vertices = graph_data["n_vertices"]
+    g = SimpleGraph(n_vertices)
+
+    for edge in graph_data["edges"]
+        add_edge!(g, edge[1], edge[2])
+    end
+
+    components = graph_data["components"]
+
+    return Tracks(voxels, g, components)
+end
+
+function save_track_binary(track::Tracks, filename::String)
+    """
+    Save a track using Julia's binary serialization (faster for large tracks).
+
+    Parameters:
+    - track: Tracks object to save
+    - filename: Filename with .jls extension
+    """
+    if !endswith(filename, ".jls")
+        filename = filename * ".jls"
+    end
+
+    serialize(filename, track)
+    println("Track saved to: $filename")
+end
+
+function load_track_binary(filename::String)
+    """
+    Load a track from binary serialization.
+
+    Parameters:
+    - filename: Filename with .jls extension
+
+    Returns:
+    - Tracks object
+    """
+    if !endswith(filename, ".jls")
+        filename = filename * ".jls"
+    end
+
+    return deserialize(filename)
+end
+
+function save_track_with_analysis(track::Tracks, filename::String; include_analysis::Bool=true)
+    """
+    Save a track with optional analysis results.
+
+    Parameters:
+    - track: Tracks object to save
+    - filename: Base filename
+    - include_analysis: Whether to include analysis results
+    """
+    # Save the track itself
+    save_track_csv(track, filename)
+
+    if include_analysis
+        # Perform analysis
+        println("Performing track analysis...")
+
+        # Find extremes with improved algorithm
+        extreme1, extreme2, path, confidence = find_track_extremes(track)
+
+        # Walk the track
+        walk_result = walk_track_from_extremes(track)
+
+        # Calculate curvatures
+        curvatures = calculate_vertex_curvatures(track)
+
+        # Energy analysis (if we have extremes)
+        sphere_results = if !isnothing(extreme1)
+            energy_in_spheres_around_extremes(track, 2.0)  # 2mm radius
+        else
+            nothing
+        end
+
+        # Create analysis summary
+        analysis = Dict(
+            "track_info" => Dict(
+                "n_voxels" => nrow(track.voxels),
+                "n_vertices" => nv(track.graph),
+                "n_edges" => ne(track.graph),
+                "total_energy" => sum(track.voxels.energy)
+            ),
+            "extremes" => Dict(
+                "extreme1" => extreme1,
+                "extreme2" => extreme2,
+                "confidence" => confidence,
+                "path_length" => length(path)
+            ),
+            "walk_analysis" => Dict(
+                "total_length_mm" => walk_result.total_length,
+                "confidence" => walk_result.confidence
+            ),
+            "curvature_analysis" => Dict(
+                "vertex_curvatures" => curvatures,
+                "max_curvature" => maximum(curvatures),
+                "mean_curvature" => mean(curvatures),
+                "sharp_turn_vertices" => findall(c -> c > 0.5, curvatures)
+            ),
+            "sphere_analysis" => sphere_results !== nothing ? Dict(
+                "radius_mm" => 2.0,
+                "blob1_energy" => sphere_results.blob1_energy,
+                "blob2_energy" => sphere_results.blob2_energy,
+                "blob1_center" => sphere_results.blob1_center,
+                "blob2_center" => sphere_results.blob2_center
+            ) : nothing
+        )
+
+        # Save analysis
+        analysis_file = filename * "_analysis.json"
+        open(analysis_file, "w") do f
+            JSON.print(f, analysis, 2)
+        end
+
+        println("Analysis saved to: $analysis_file")
+    end
+end
+
+function print_track_summary(track::Tracks)
+    """
+    Print a summary of the track for inspection.
+    """
+    println("=" ^ 50)
+    println("TRACK SUMMARY")
+    println("=" ^ 50)
+
+    println("Voxels: $(nrow(track.voxels))")
+    println("Graph vertices: $(nv(track.graph))")
+    println("Graph edges: $(ne(track.graph))")
+    println("Components: $(length(track.components))")
+    println("Total energy: $(round(sum(track.voxels.energy), digits=3))")
+
+    # Show vertex degrees
+    println("\nVertex degrees:")
+    endpoints = Int[]
+    for v in vertices(track.graph)
+        deg = degree(track.graph, v)
+        if deg == 1
+            push!(endpoints, v)
+        end
+        println("  Vertex $v: degree $deg")
+    end
+
+    if !isempty(endpoints)
+        println("Endpoints (degree-1): $endpoints")
+    else
+        println("No endpoints found (circular or complex topology)")
+    end
+
+    # Run analysis
+    println("\n" * "-" ^ 30)
+    println("TRACK ANALYSIS")
+    println("-" ^ 30)
+
+    extreme1, extreme2, path, confidence = find_track_extremes(track)
+    println("Extremes: $extreme1 ↔ $extreme2 (confidence: $(round(confidence, digits=3)))")
+
+    if !isnothing(extreme1)
+        pos1 = (track.voxels.x[extreme1], track.voxels.y[extreme1], track.voxels.z[extreme1])
+        pos2 = (track.voxels.x[extreme2], track.voxels.y[extreme2], track.voxels.z[extreme2])
+        println("Positions: $pos1 ↔ $pos2")
+
+        # Path analysis
+        path_length = calculate_path_length(track, path)
+        straight_dist = euclidean_distance(pos1[1], pos1[2], pos1[3], pos2[1], pos2[2], pos2[3])
+        efficiency = straight_dist / path_length
+
+        println("Path length: $(round(path_length, digits=2)) mm")
+        println("Straight distance: $(round(straight_dist, digits=2)) mm")
+        println("Path efficiency: $(round(efficiency, digits=3))")
+    end
+
+    # Curvature analysis
+    curvatures = calculate_vertex_curvatures(track)
+    if !isempty(curvatures)
+        max_curv = maximum(curvatures)
+        sharp_turns = findall(c -> c > 0.5, curvatures)
+
+        println("Max curvature: $(round(max_curv, digits=3))")
+        if !isempty(sharp_turns)
+            println("Sharp turns at vertices: $sharp_turns")
+        end
+    end
+
+    println("=" ^ 50)
+end
+
+"""
+    save_tracks_to_hdf5(tracks::Vector{Tracks}, hdf5_file, batch_id::Int)
+
+Save a batch of tracks to an HDF5 file.
+
+# Arguments
+- `tracks::Vector{Tracks}`: Vector of track objects to save
+- `hdf5_file`: Open HDF5 file handle
+- `batch_id::Int`: Batch identifier for organizing data
+
+# Returns
+- `Float64`: Elapsed time in seconds for saving
+"""
+function save_tracks_to_hdf5(tracks::Vector{Tracks}, hdf5_file, batch_id::Int)
+    if isempty(tracks)
+        return 0.0  # Return zero time
+    end
+
+    n_tracks = length(tracks)
+    print("    Saving $n_tracks tracks to HDF5...")
+    flush(stdout)
+
+    start_time = time()
+    for (idx, track) in enumerate(tracks)
+        if idx % 10 == 0 || idx == n_tracks
+            print("\r    Saving track $idx/$n_tracks to HDF5...")
+            flush(stdout)
+        end
+
+        track_group = "batch_$(batch_id)/track_$(idx)"
+
+        # Create group if it doesn't exist
+        if !haskey(hdf5_file, track_group)
+            g = create_group(hdf5_file, track_group)
+        else
+            g = hdf5_file[track_group]
+        end
+
+        # Save voxels data (this is the slow part for large tracks)
+        voxels_data = Matrix(track.voxels)
+        g["voxels"] = voxels_data
+        g["voxel_columns"] = String.(names(track.voxels))
+
+        # Save graph edges - optimize by preallocating
+        n_edges = ne(track.graph)
+        if n_edges > 0
+            edge_matrix = zeros(Int, n_edges, 2)
+            for (i, edge) in enumerate(edges(track.graph))
+                edge_matrix[i, 1] = src(edge)
+                edge_matrix[i, 2] = dst(edge)
+            end
+            g["graph_edges"] = edge_matrix
+        else
+            g["graph_edges"] = zeros(Int, 0, 2)
+        end
+
+        # Save graph metadata
+        g["n_vertices"] = nv(track.graph)
+
+        # Save components
+        if !isempty(track.components)
+            max_comp_len = maximum(length.(track.components))
+            comp_matrix = zeros(Int, length(track.components), max_comp_len)
+            for (i, comp) in enumerate(track.components)
+                comp_matrix[i, 1:length(comp)] .= comp
+            end
+            g["components"] = comp_matrix
+            g["component_lengths"] = length.(track.components)
+        end
+    end
+    elapsed_time = time() - start_time
+    println("\r    Saved $n_tracks tracks to HDF5 in $(round(elapsed_time, digits=2))s        ")
+    return elapsed_time
+end
+
+"""
+    read_tracks_from_hdf5(output_file::String)
+
+Read tracks from the output HDF5 file and return them as a vector.
+
+# Arguments
+- `output_file::String`: Path to the HDF5 output file
+
+# Returns
+- `Vector{Tracks}`: Vector of reconstructed track objects
+- `Dict`: Metadata from the file
+"""
+function read_tracks_from_hdf5(output_file::String)
+    println("Reading tracks from: $output_file")
+    tracks = Tracks[]
+    metadata = Dict{String, Any}()
+    start_time = time()
+
+    h5open(output_file, "r") do fid
+        # Read metadata
+        println("  Reading metadata...")
+        for attr_name in keys(attrs(fid))
+            metadata[attr_name] = read_attribute(fid, attr_name)
+        end
+
+        # Count total batches and tracks first
+        batch_keys = filter(k -> startswith(k, "batch_"), collect(keys(fid)))
+        total_batches = length(batch_keys)
+        println("  Found $total_batches batches")
+
+        # Read all batches
+        for (batch_idx, batch_key) in enumerate(batch_keys)
+            batch_group = fid[batch_key]
+            track_keys = filter(k -> startswith(k, "track_"), collect(keys(batch_group)))
+            n_tracks_in_batch = length(track_keys)
+
+            print("  Reading batch $batch_idx/$total_batches ($n_tracks_in_batch tracks)...")
+            flush(stdout)
+
+            # Read all tracks in this batch
+            for track_key in track_keys
+                track_group = batch_group[track_key]
+
+                # Reconstruct voxels DataFrame
+                voxels_data = read(track_group["voxels"])
+                voxels_columns = read(track_group["voxel_columns"])
+                voxels = DataFrame(voxels_data, Symbol.(voxels_columns))
+
+                # Reconstruct graph
+                n_vertices = read(track_group["n_vertices"])
+                g = SimpleGraph(n_vertices)
+
+                graph_edges = read(track_group["graph_edges"])
+                if size(graph_edges, 1) > 0
+                    for i in 1:size(graph_edges, 1)
+                        add_edge!(g, graph_edges[i, 1], graph_edges[i, 2])
+                    end
+                end
+
+                # Reconstruct components
+                comp_matrix = read(track_group["components"])
+                comp_lengths = read(track_group["component_lengths"])
+                components = Vector{Vector{Int}}(undef, length(comp_lengths))
+                for i in 1:length(comp_lengths)
+                    components[i] = Vector{Int}(comp_matrix[i, 1:comp_lengths[i]])
+                end
+
+                # Create track object
+                track = Tracks(voxels, g, components)
+                push!(tracks, track)
+            end
+            println(" done")
+        end
+    end
+
+    elapsed_time = time() - start_time
+    n_tracks = length(tracks)
+    println("Loaded $n_tracks tracks from $output_file in $(round(elapsed_time, digits=2))s")
+    if n_tracks > 0
+        println("Average time per track (reading): $(round(1000*elapsed_time/n_tracks, digits=2))ms")
+    end
+
+    # Add timing info to metadata
+    metadata["reading_time"] = elapsed_time
+    metadata["avg_read_time_per_track_ms"] = n_tracks > 0 ? 1000*elapsed_time/n_tracks : 0.0
+
+    return tracks, metadata
+end
+
+"""
+    chain_track_files(file_paths::Vector{String})
+
+Read and chain tracks from multiple HDF5 files.
+
+# Arguments
+- `file_paths::Vector{String}`: Vector of paths to HDF5 track files
+
+# Returns
+- `Vector{Tracks}`: Vector containing all tracks from all files
+- `Vector{Dict}`: Vector of metadata dictionaries, one per file
+
+# Example
+```julia
+files = ["file1.h5", "file2.h5", "file3.h5"]
+all_tracks, metadatas = chain_track_files(files)
+println("Total tracks: ", length(all_tracks))
+```
+"""
+function chain_track_files(file_paths::Vector{String})
+    all_tracks = Tracks[]
+    all_metadata = Dict{String, Any}[]
+
+    println("Chaining $(length(file_paths)) track files...")
+
+    for (idx, file_path) in enumerate(file_paths)
+        if !isfile(file_path)
+            println("Warning: File not found, skipping: $file_path")
+            continue
+        end
+
+        println("\n[$idx/$(length(file_paths))] Reading: $file_path")
+        tracks, metadata = read_tracks_from_hdf5(file_path)
+
+        append!(all_tracks, tracks)
+        push!(all_metadata, metadata)
+
+        println("  Added $(length(tracks)) tracks (total so far: $(length(all_tracks)))")
+    end
+
+    println("\n" * "="^60)
+    println("CHAINING COMPLETE")
+    println("="^60)
+    println("Total files processed: $(length(all_metadata))")
+    println("Total tracks: $(length(all_tracks))")
+
+    return all_tracks, all_metadata
+end
+
+"""
+    chain_track_files(file_paths::String...)
+
+Read and chain tracks from multiple HDF5 files (variadic version).
+
+# Arguments
+- `file_paths::String...`: Paths to HDF5 track files as individual arguments
+
+# Returns
+- `Vector{Tracks}`: Vector containing all tracks from all files
+- `Vector{Dict}`: Vector of metadata dictionaries, one per file
+
+# Example
+```julia
+all_tracks, metadatas = chain_track_files("file1.h5", "file2.h5", "file3.h5")
+```
+"""
+function chain_track_files(file_paths::String...)
+    return chain_track_files(collect(file_paths))
+end

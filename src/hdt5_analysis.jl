@@ -11,6 +11,33 @@ struct AnalysisResults
     n_failed::Int
 end
 
+function determine_events_to_process(events_to_run, unique_event_ids)
+    # Determine which events to process
+    if events_to_run === nothing
+        # Process all events
+        event_ids_to_process = unique_event_ids
+    elseif isa(events_to_run, Integer)
+        # Process first N events
+        n_available = length(unique_event_ids)
+        n_to_process = min(events_to_run, n_available)
+        event_ids_to_process = unique_event_ids[1:n_to_process]
+    elseif isa(events_to_run, AbstractRange) || isa(events_to_run, AbstractVector)
+        # Process specific event IDs if they exist in the DataFrame
+        event_ids_to_process = filter(id -> id in unique_event_ids, collect(events_to_run))
+        if isempty(event_ids_to_process) && !isempty(events_to_run)
+            # Only warn if we requested specific IDs that don't exist (not for empty input)
+            println("Warning: None of the requested event IDs exist in the DataFrame")
+            if !isempty(unique_event_ids)
+                println("Available event IDs range from $(minimum(unique_event_ids)) to $(maximum(unique_event_ids))")
+            else
+                println("No events available in the DataFrame")
+            end
+        end
+    else
+        throw(ArgumentError("events_to_run must be nothing, an Integer, a Range, or a Vector"))
+    end
+    return event_ids_to_process
+end
 
 """
     analysis_loop(hitsdf::DataFrame; events_to_run=nothing, voxel_size_mm=2.0, max_distance_mm=5.0, energy_threshold_kev=1.0)
@@ -39,27 +66,9 @@ function analysis_loop(hitsdf::DataFrame;
     
     # Get the actual event IDs from the DataFrame
     unique_event_ids = sort(unique(hitsdf.event_id))
-    
-    # Determine which events to process
-    if events_to_run === nothing
-        # Process all events
-        event_ids_to_process = unique_event_ids
-    elseif isa(events_to_run, Integer)
-        # Process first N events
-        n_available = length(unique_event_ids)
-        n_to_process = min(events_to_run, n_available)
-        event_ids_to_process = unique_event_ids[1:n_to_process]
-    elseif isa(events_to_run, AbstractRange) || isa(events_to_run, AbstractVector)
-        # Process specific event IDs if they exist in the DataFrame
-        event_ids_to_process = filter(id -> id in unique_event_ids, collect(events_to_run))
-        if isempty(event_ids_to_process) && !isempty(events_to_run)
-            # Only warn if we requested specific IDs that don't exist (not for empty input)
-            println("Warning: None of the requested event IDs exist in the DataFrame")
-            println("Available event IDs range from $(minimum(unique_event_ids)) to $(maximum(unique_event_ids))")
-        end
-    else
-        throw(ArgumentError("events_to_run must be nothing, an Integer, a Range, or a Vector"))
-    end
+
+    # Determine which events to process using helper function
+    event_ids_to_process = determine_events_to_process(events_to_run, unique_event_ids)
     
     # Initialize arrays to collect data for DataFrames
     single_track_data = (event_id=Int[], energy=Float64[], x=Float64[], y=Float64[], z=Float64[])
@@ -183,7 +192,7 @@ function analysis_loop(hitsdf::DataFrame;
     
     # Finish progress bar
     finish!(progress)
-    println("✅ Analysis completed! Processed $n_events_processed events.")
+    println(" Analysis completed! Processed $n_events_processed events.")
     
     # Create DataFrames from collected data
     single_track_df = DataFrame(
@@ -241,9 +250,124 @@ function analysis_loop(hitsdf::DataFrame;
 
 end
 
+"""
+    analysis_loop_single_track(hitsdf::DataFrame; events_to_run=nothing, voxel_size_mm=2.0, max_distance_mm=5.0, energy_threshold_kev=1.0)
+
+Analyze multiple events to extract only single-track events and return them as a vector of Tracks objects.
+
+# Arguments
+- `hitsdf::DataFrame`: DataFrame containing hit data
+- `events_to_run`: Same options as analysis_loop
+- `voxel_size_mm::Float64=2.0`: Voxel size in mm
+- `max_distance_mm::Float64=5.0`: Maximum distance for track clustering
+- `energy_threshold_kev::Float64=1.0`: Energy threshold in keV
+
+# Returns
+- `Vector{Tracks}`: Vector containing only single-track events
+"""
+function analysis_loop_single_track(hitsdf::DataFrame; 
+                      events_to_run=nothing, 
+                      voxel_size_mm::Float64=2.0,
+                      max_distance_mm::Float64=5.0, 
+                      energy_threshold_kev::Float64=1.0)
+    
+    # Get the actual event IDs from the DataFrame
+    unique_event_ids = sort(unique(hitsdf.event_id))
+    
+    event_ids_to_process = determine_events_to_process(events_to_run, unique_event_ids)
+    # Initialize counters
+    n_single_track = 0
+    n_events_processed = 0
+    n_failed = 0
+    
+    TRACKS = Tracks[]
+    for nevent in event_ids_to_process
+        n_events_processed += 1
+        
+        try
+            tracks = select_events(hitsdf, nevent; 
+                                 voxel_size_mm=voxel_size_mm, 
+                                 max_distance_mm=max_distance_mm, 
+                                 energy_threshold_kev=energy_threshold_kev)
+
+            if length(tracks) == 1
+                push!(TRACKS, tracks[1])
+
+                n_single_track += 1
+            else
+                continue
+            end
+
+        catch e
+            println("Warning: Error processing event $nevent: $e")
+            n_failed += 1
+        end
+    end
+    
+    println(" Analysis completed! Processed $n_events_processed events.")
+    println(" Number of single track events $n_single_track")
+    
+    return TRACKS
+
+end
 
 """
-    event_loop(cmdir; input_file="0nubb.next.h5", events_to_run=100, voxel_size_mm=5, 
+    validate_event_loop_parameters(events_to_run, voxel_size_mm, max_distance_mm, energy_threshold_kev)
+
+Helper function to validate common parameters for event loop functions.
+"""
+function validate_event_loop_parameters(events_to_run, voxel_size_mm, max_distance_mm, energy_threshold_kev)
+    if events_to_run <= 0
+        throw(ArgumentError("events_to_run must be positive, got $events_to_run"))
+    end
+    if voxel_size_mm <= 0
+        throw(ArgumentError("voxel_size_mm must be positive, got $voxel_size_mm"))
+    end
+    if max_distance_mm <= 0
+        throw(ArgumentError("max_distance_mm must be positive, got $max_distance_mm"))
+    end
+    if energy_threshold_kev < 0
+        throw(ArgumentError("energy_threshold_kev must be non-negative, got $energy_threshold_kev"))
+    end
+end
+
+"""
+    load_and_prepare_data(cmdir, input_file, xyc, zc)
+
+Helper function to load HDF5 data and apply fiducial cuts.
+
+# Returns
+- `DataFrame`: Processed hits DataFrame after fiducial cuts
+"""
+function load_and_prepare_data(cmdir, input_file, xyc, zc)
+    # Load data file
+    xfile = joinpath(cmdir, input_file)
+    if !isfile(xfile)
+        throw(ArgumentError("Input file not found: $xfile"))
+    end
+
+    println(" Loading data from: $xfile")
+    dfs = get_dataset_dfs(xfile)
+    hitsdf = dfs["hits"]
+
+    ###
+    ### Aplying fiducial cuts to large files is very slow
+    ### better to apply them at analysis level
+    ####
+
+    #println(" Applying fiducial volume cuts (xyc=$xyc, zc=$zc)")
+    #hitsdf_fiducial = filter_fiducial_events(hitsdf, xyc, zc)
+
+    # Get actual number of unique events after fiducial cuts
+    #n_events_available = length(unique(hitsdf_fiducial.event_id))
+    #println(" Found $n_events_available events after fiducial cuts")
+
+    #return hitsdf_fiducial
+    return hitsdf
+end
+
+"""
+    event_loop(cmdir; input_file="0nubb.next.h5", events_to_run=100, voxel_size_mm=5,
                max_distance_mm=10, energy_threshold_kev=10, xyc=1800.0, zc=100.0)
 
 Process HDF5 data file through the full analysis pipeline with fiducial volume cuts.
@@ -262,54 +386,241 @@ Process HDF5 data file through the full analysis pipeline with fiducial volume c
 - `AnalysisResults`: Analysis results with track statistics and energy distributions
 """
 function event_loop(cmdir; input_file="0nubb.next.h5",
-                    events_to_run=100, 
+                    events_to_run=100,
                     voxel_size_mm=5,
-                    max_distance_mm=10, 
+                    max_distance_mm=10,
                     energy_threshold_kev=10,
                     xyc::Float64=1950.0,
                     zc::Float64=10.0)
-    
+
     # Validate input parameters
-    if events_to_run <= 0
-        throw(ArgumentError("events_to_run must be positive, got $events_to_run"))
-    end
-    if voxel_size_mm <= 0
-        throw(ArgumentError("voxel_size_mm must be positive, got $voxel_size_mm"))
-    end
-    if max_distance_mm <= 0
-        throw(ArgumentError("max_distance_mm must be positive, got $max_distance_mm"))
-    end
-    if energy_threshold_kev < 0
-        throw(ArgumentError("energy_threshold_kev must be non-negative, got $energy_threshold_kev"))
-    end
-    
-    # Load data file
-    xfile = joinpath(cmdir, input_file)
-    if !isfile(xfile)
-        throw(ArgumentError("Input file not found: $xfile"))
-    end
-    
-    println("📁 Loading data from: $xfile")
-    dfs = get_dataset_dfs(xfile)
-    hitsdf = dfs["hits"]
-    
-    println("🔍 Applying fiducial volume cuts (xyc=$xyc, zc=$zc)")
-    hitsdf_fiducial = filter_fiducial_events(hitsdf, xyc, zc)
-    
-    # Get actual number of unique events after fiducial cuts
-    n_events_available = length(unique(hitsdf_fiducial.event_id))
-    println("📊 Found $n_events_available events after fiducial cuts")
-    
-    println("🔬 Starting analysis of up to $events_to_run events")
-    results = analysis_loop(hitsdf_fiducial; 
+    validate_event_loop_parameters(events_to_run, voxel_size_mm, max_distance_mm, energy_threshold_kev)
+
+    # Load and prepare data
+    hitsdf_fiducial = load_and_prepare_data(cmdir, input_file, xyc, zc)
+
+    println(" Starting analysis of up to $events_to_run events")
+    results = analysis_loop(hitsdf_fiducial;
                            events_to_run=events_to_run,  # Pass integer to process first N events
                            voxel_size_mm,
-                           max_distance_mm, 
+                           max_distance_mm,
+                           energy_threshold_kev)
+    return results
+end
+
+"""
+    event_loop_single_track(cmdir; input_file="0nubb.next.h5", events_to_run=100, voxel_size_mm=5,
+                            max_distance_mm=10, energy_threshold_kev=10, xyc=1950.0, zc=10.0)
+
+Process HDF5 data file to extract only single-track events.
+
+# Arguments
+- Same as `event_loop`
+
+# Returns
+- `Vector{Tracks}`: Vector containing only single-track events
+"""
+function event_loop_single_track(cmdir; input_file="0nubb.next.h5",
+                    events_to_run=100,
+                    voxel_size_mm=5,
+                    max_distance_mm=10,
+                    energy_threshold_kev=10,
+                    xyc::Float64=1950.0,
+                    zc::Float64=10.0)
+
+    # Validate input parameters
+    validate_event_loop_parameters(events_to_run, voxel_size_mm, max_distance_mm, energy_threshold_kev)
+
+    # Load and prepare data
+    hitsdf_fiducial = load_and_prepare_data(cmdir, input_file, xyc, zc)
+
+    println(" Starting analysis of up to $events_to_run events")
+    results = analysis_loop_single_track(hitsdf_fiducial;
+                           events_to_run=events_to_run,  # Pass integer to process first N events
+                           voxel_size_mm,
+                           max_distance_mm,
                            energy_threshold_kev)
     return results
 end
 
 
+"""
+    analysis_loop_single_track2(hitsdf::DataFrame;
+                               events_to_run=nothing,
+                               initial_event=1,
+                               show_progress=false,
+                               voxel_size_mm::Float64=2.0,
+                               max_distance_mm::Float64=5.0,
+                               energy_threshold_kev::Float64=1.0,
+                               emin::Float64=-Inf,
+                               emax::Float64=Inf)
+
+Analyze events to extract single-track events with support for starting from a specific event
+and showing progress.
+
+# Arguments
+- `hitsdf::DataFrame`: DataFrame containing hit data
+- `events_to_run`: Number of events to process (integer)
+- `initial_event::Int=1`: First event to process (skips events before this)
+- `show_progress::Bool=false`: If true, display a progress bar
+- `voxel_size_mm::Float64=2.0`: Voxel size in mm
+- `max_distance_mm::Float64=5.0`: Maximum distance for track clustering
+- `energy_threshold_kev::Float64=1.0`: Energy threshold in keV
+- `emin::Float64=-Inf`: Minimum event energy in keV
+- `emax::Float64=Inf`: Maximum event energy in keV
+
+# Returns
+- `Vector{Tracks}`: Vector containing only single-track events
+"""
+function analysis_loop_single_track2(hitsdf::DataFrame;
+                      events_to_run=nothing,
+                      initial_event::Int=1,
+                      show_progress::Bool=false,
+                      voxel_size_mm::Float64=2.0,
+                      max_distance_mm::Float64=5.0,
+                      energy_threshold_kev::Float64=1.0,
+                      emin::Float64=-Inf,
+                      emax::Float64=Inf)
+
+    # Get the actual event IDs from the DataFrame
+    unique_event_ids = sort(unique(hitsdf.event_id))
+
+    # Validate initial_event
+    if initial_event < 1
+        throw(ArgumentError("initial_event must be >= 1, got $initial_event"))
+    end
+    if initial_event > length(unique_event_ids)
+        throw(ArgumentError("initial_event ($initial_event) exceeds total events ($(length(unique_event_ids)))"))
+    end
+
+    # Determine which events to process
+    if events_to_run === nothing
+        # Process from initial_event to end
+        event_ids_to_process = unique_event_ids[initial_event:end]
+    else
+        # Process events_to_run events starting from initial_event
+        end_idx = min(initial_event + events_to_run - 1, length(unique_event_ids))
+        event_ids_to_process = unique_event_ids[initial_event:end_idx]
+    end
+
+    # Initialize counters
+    n_single_track = 0
+    n_events_processed = 0
+    n_failed = 0
+
+    TRACKS = Tracks[]
+
+    # Create progress bar if requested
+    if show_progress
+        prog = Progress(length(event_ids_to_process), 1, "Processing events: ")
+    end
+
+    for nevent in event_ids_to_process
+        n_events_processed += 1
+
+        try
+            tracks = select_events(hitsdf, nevent;
+                                 voxel_size_mm=voxel_size_mm,
+                                 max_distance_mm=max_distance_mm,
+                                 energy_threshold_kev=energy_threshold_kev,
+                                 emin=emin,
+                                 emax=emax)
+
+            if length(tracks) == 1
+                push!(TRACKS, tracks[1])
+                n_single_track += 1
+            #else
+                #println("number of tracks found = $(length(tracks))")
+            end
+
+        catch e
+            println("Warning: Error processing event $nevent: $e")
+            n_failed += 1
+        end
+
+        # Update progress bar if enabled
+        if show_progress
+            next!(prog)
+        end
+    end
+
+    # Finish progress bar if enabled
+    if show_progress
+        finish!(prog)
+    end
+
+    println(" Analysis completed! Processed $n_events_processed events.")
+    println(" Number of single track events $n_single_track")
+
+    return TRACKS
+end
+
+
+"""
+    event_loop_single_track2(cmdir; input_file="0nubb.next.h5",
+                            events_to_run=100,
+                            initial_event=1,
+                            show_progress=false,
+                            voxel_size_mm=5,
+                            max_distance_mm=10,
+                            energy_threshold_kev=10,
+                            xyc::Float64=1950.0,
+                            zc::Float64=10.0)
+
+Process HDF5 data file to extract only single-track events, with support for starting
+from a specific event and showing progress.
+
+# Arguments
+- `cmdir`: Directory containing the input file
+- `input_file="0nubb.next.h5"`: Name of the HDF5 input file
+- `events_to_run=100`: Number of events to process
+- `initial_event=1`: First event to process (1-indexed, skips initial_event-1 events)
+- `show_progress=false`: If true, display a progress bar
+- `voxel_size_mm=5`: Voxel size in mm for spatial discretization
+- `max_distance_mm=10`: Maximum distance in mm for connecting voxels into tracks
+- `energy_threshold_kev=10`: Minimum energy threshold in keV for including voxels
+- `xyc=1950.0`: Fiducial cut value for x and y coordinates (mm)
+- `zc=10.0`: Fiducial cut value for z coordinate (mm)
+
+# Returns
+- `Vector{Tracks}`: Vector containing only single-track events
+
+# Example
+```julia
+# Process events 1000 to 2000
+tracks = event_loop_single_track2(cmdir;
+                                 input_file="input.h5",
+                                 events_to_run=1001,
+                                 initial_event=1000,
+                                 show_progress=true)
+```
+"""
+function event_loop_single_track2(cmdir; input_file="0nubb.next.h5",
+                    events_to_run=100,
+                    initial_event::Int=1,
+                    show_progress::Bool=false,
+                    voxel_size_mm=5,
+                    max_distance_mm=10,
+                    energy_threshold_kev=10,
+                    xyc::Float64=1950.0,
+                    zc::Float64=10.0)
+
+    # Validate input parameters
+    validate_event_loop_parameters(events_to_run, voxel_size_mm, max_distance_mm, energy_threshold_kev)
+
+    # Load and prepare data
+    hitsdf_fiducial = load_and_prepare_data(cmdir, input_file, xyc, zc)
+
+    println(" Starting analysis from event $initial_event, processing $events_to_run events")
+    results = analysis_loop_single_track2(hitsdf_fiducial;
+                           events_to_run=events_to_run,
+                           initial_event=initial_event,
+                           show_progress=show_progress,
+                           voxel_size_mm,
+                           max_distance_mm,
+                           energy_threshold_kev)
+    return results
+end
 
 
 """

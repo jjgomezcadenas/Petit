@@ -3,6 +3,7 @@ using Petit
 using Test
 using DataFrames
 using Graphs
+using Statistics
 
 @testset "Analysis Functions" begin
     

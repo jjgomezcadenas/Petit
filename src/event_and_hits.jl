@@ -13,21 +13,35 @@ Process a single event to find tracks by voxelizing hits and applying clustering
 # Returns
 - `Vector{Tracks}`: Array of track objects found in the event, sorted by total energy deposition (highest energy first)
 """
-function select_events(hitsdf::DataFrame, nevent::Int; 
-                       voxel_size_mm::Float64=2.0, 
-                       max_distance_mm::Float64=5.0, 
-                       energy_threshold_kev::Float64=10.0)
+function select_events(hitsdf::DataFrame, nevent::Int;
+                       voxel_size_mm::Float64=2.0,
+                       max_distance_mm::Float64=5.0,
+                       energy_threshold_kev::Float64=10.0,
+                       emin::Float64=-Inf,
+                       emax::Float64=Inf)
     # Convert keV threshold to energy units (assuming data is in MeV)
     energy_threshold = energy_threshold_kev * 1e-3
-    
+
     # First get the specific event to avoid processing unnecessary data
     event_data = get_event(hitsdf, nevent)
-    
+
+    # Calculate total event energy in keV
+    energy = 1e+3 * sum(event_data.energy)
+    #println("energy = $energy")
+
+    # Check if event energy is within range
+    if energy < emin || energy > emax
+        #println("Event $nevent rejected: energy=$energy keV not in range [$emin, $emax] keV")
+        return Tracks[]  # Return empty tracks array
+    end
+
+    #println("+++event passes energy cut+++")
+
     # Create a temporary DataFrame with just this event for voxelization
     temp_df = DataFrame(
         event_id = [nevent for _ in 1:nrow(event_data)],
         x = event_data.x,
-        y = event_data.y, 
+        y = event_data.y,
         z = event_data.z,
         energy = event_data.energy
     )
@@ -357,10 +371,53 @@ end
 function hits_per_all_events(hitsdf::DataFrame)
     ghdf = groupby(hitsdf, :event_id)
     counts = Vector{Int}(undef, length(ghdf))
-    
+
     for (i, subdf) in enumerate(ghdf)
         counts[i] = nrow(subdf)
     end
-    
+
     return counts
+end
+
+"""
+    nof_events(xfile::String)
+
+Read the number of events from the HDF5 file configuration.
+
+# Arguments
+- `xfile::String`: Full path to the HDF5 file
+
+# Returns
+- `Int`: Number of events in the file from configuration
+"""
+function nof_events(xfile::String)
+    h5open(xfile, "r") do fid
+        config_array = read(fid["MC/configuration"])
+        param_value = config_array[2].param_value
+        return parse(Int, param_value)
+    end
+end
+
+"""
+    count_events(cmdir::String, input_file::String)
+
+Count the total number of events with hits in the input HDF5 file.
+
+# Arguments
+- `cmdir::String`: Directory containing the input file
+- `input_file::String`: Name of the HDF5 input file
+
+# Returns
+- `Int`: Total number of unique events with hits in the file
+"""
+function count_events(cmdir::String, input_file::String)
+    filepath = joinpath(cmdir, input_file)
+    dfs = get_dataset_dfs(filepath)
+
+    # Assuming the hits data contains event_id column
+    if haskey(dfs, "hits")
+        return length(unique(dfs["hits"].event_id))
+    else
+        error("No 'hits' dataset found in HDF5 file")
+    end
 end

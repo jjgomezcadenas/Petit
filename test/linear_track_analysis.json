@@ -1,0 +1,45 @@
+{
+  "curvature_analysis": {
+    "vertex_curvatures": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_curvature": 0.0,
+    "mean_curvature": 0.0,
+    "sharp_turn_vertices": []
+  },
+  "walk_analysis": {
+    "total_length_mm": 4.0,
+    "confidence": 0.9
+  },
+  "sphere_analysis": {
+    "blob2_energy": 0.6000000000000001,
+    "radius_mm": 2.0,
+    "blob1_center": [
+      4.0,
+      0.0,
+      0.0
+    ],
+    "blob2_center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "blob1_energy": 1.2
+  },
+  "track_info": {
+    "n_edges": 4,
+    "n_voxels": 5,
+    "n_vertices": 5,
+    "total_energy": 1.5
+  },
+  "extremes": {
+    "extreme2": 5,
+    "path_length": 5,
+    "extreme1": 1,
+    "confidence": 0.9
+  }
+}
