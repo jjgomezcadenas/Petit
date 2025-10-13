@@ -4,6 +4,18 @@
 using Markdown
 using InteractiveUtils
 
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    return quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
 # ╔═╡ 349825ff-7ffe-4fa1-ba26-a772041f0323
 begin
 	using Revise
@@ -66,7 +78,192 @@ begin
 	jn = ingredients(string(pdir,"/src/Petit.jl"))
 end
 
-# ╔═╡ fda162d5-3552-4716-968f-d2c72a093c39
+# ╔═╡ 8290afe2-e5cb-4793-b108-a313f2677119
+md"""
+## Functions
+"""
+
+# ╔═╡ 982a3890-7318-4034-b7fd-decafc288362
+function voxel_size(dx, dy, p, l)
+	sqrt(l)*(dx + dy) /(2.0*sqrt(p))
+end
+
+# ╔═╡ b581c086-865c-4761-864d-ca8e549f8a75
+function copy_eff!(effbkg, effiso)
+	effbkg.efffid =effiso.efffid
+	effbkg.effroi =effiso.effroi
+	effbkg.effblb =effiso.effblb
+end
+
+
+# ╔═╡ 0d6dfea6-48ea-4645-b00c-568ea4e204af
+total_eff(e) = reduce(*, (e.eff1tr, e.efffid, e.effroi, e.effblb))
+
+# ╔═╡ 46e73d58-dc53-42bb-add7-088ac144ca24
+function histo_b1_b2(xeb1, xeb2)
+	
+	h_b1, p_b1 = jn.Petit.step_hist(xeb1;
+	         nbins = 20,
+	         xlabel = "Eb1",
+	        ylabel = "Frequency",
+	         title=" Eb1 ")
+	h_b2, p_b2 = jn.Petit.step_hist(xeb2;
+	         nbins = 20,
+	         xlabel = "Eb2",
+	        ylabel = "Frequency",
+	         title=" Eb2 ")
+	
+	plot(p_b1, p_b2)
+end
+
+# ╔═╡ 65ec723a-6a38-4a2c-88e5-d6e1c59375bf
+function eb1_eb2_plot(eblob1, eblob2; title="", eblob_cut=600.0)
+
+    p3 = scatter(eblob1, eblob2,
+        xlabel = "Blob 1 Energy (keV)",
+        ylabel = "Blob 2 Energy (keV)",
+        title = "Blob Energy Correlation",
+        label = nothing,
+        markersize = 4,
+        markercolor = :purple,
+        markeralpha = 0.6,
+        markerstrokewidth = 0.5,
+        markerstrokecolor = :black,
+        xlims = (0, maximum([maximum(eblob1), maximum(eblob2)]) * 1.05),
+        ylims = (0, maximum([maximum(eblob1), maximum(eblob2)]) * 1.05),
+        aspect_ratio = :equal,
+        grid = true,
+        gridstyle = :dot,
+        gridalpha = 0.3
+    )
+
+    # Add diagonal reference line
+    max_energy = maximum([maximum(eblob1), maximum(eblob2)])
+    plot!(p3, [0, max_energy], [0, max_energy],
+        line = :dash,
+        linecolor = :red,
+        linewidth = 1,
+        label = "y = x",
+        alpha = 0.5
+    )
+
+    # Add horizontal line at eblob_cut level
+    plot!(p3, [0, max_energy], [eblob_cut, eblob_cut],
+        line = :dash,
+        linecolor = :blue,
+        linewidth = 2,
+        label = "Cut: $(eblob_cut) keV",
+        alpha = 0.7
+    )
+	p3
+
+
+end
+
+# ╔═╡ 1052ab37-288a-4c84-9bbe-3407a6a0dfaf
+function fom_plot(results_df::DataFrame, title::String="")
+    # Create the plot with error bars
+    p = scatter(results_df.eblob2, results_df.eff,
+                yerror = results_df.err,
+                xlabel = "Blob 2 Energy Cut (keV)",
+                ylabel = "Efficiency",
+                title = isempty(title) ? "Efficiency vs Energy Cut" : title,
+                label = "Data",
+                markersize = 5,
+                markercolor = :blue,
+                markerstrokewidth = 1,
+                markerstrokecolor = :black,
+                linecolor = :blue,
+                linewidth = 1,
+                ylims = (0, maximum(results_df.eff) * 1.1),
+                grid = true,
+                gridstyle = :dot,
+                gridalpha = 0.3,
+                legend = :topright)
+
+    # Add a smooth line through the points
+    plot!(p, results_df.eblob2, results_df.eff,
+          line = :solid,
+          linewidth = 2,
+          label = nothing,
+          color = :blue,
+          alpha = 0.5)
+
+    # Add percentage labels on secondary y-axis
+    plot!(p, yticks = (0:0.1:1.0, ["$(Int(y*100))%" for y in 0:0.1:1.0]))
+
+    return p
+end
+
+
+# ╔═╡ d2b5f0e9-4a79-4c33-afb2-7e970fb5565d
+function eb1_vs_eb2(xeb1, xeb2, effdf; eblob_cut=600.0)
+	p1 = eb1_eb2_plot(xeb1, xeb2, title="Bi-214", eblob_cut=eblob_cut)
+	p2 = fom_plot(effdf, "Eff: Bi-214")
+    plot(p1, p2,
+        layout = (1, 2),
+        size = (900, 500),
+        #plot_title = "energy blob1 vs energy blob2",
+        plot_titlefontsize = 16,
+        margin = 5Plots.mm
+    )
+end
+
+# ╔═╡ 641e9a21-5999-4eaa-8904-8e03fa952b49
+function fom_plots(results::Vector{DataFrame}, 
+				   labels::Vector{String},title::String="")
+	p = scatter(
+                xlabel = "Blob 2 Energy Cut (keV)",
+                ylabel = "Efficiency",
+                title = isempty(title) ? "Efficiency vs Energy Cut" : title,
+                label = "Data",
+                markersize = 5,
+                markercolor = :blue,
+                markerstrokewidth = 1,
+                markerstrokecolor = :black,
+                linecolor = :blue,
+                linewidth = 1,
+                grid = true,
+                gridstyle = :dot,
+                gridalpha = 0.3,
+                legend = :topright)
+	
+    for (i, result_df) in enumerate(results)
+    	p = scatter!(p, result_df.eblob2, result_df.eff,	 
+                	yerror = result_df.err,
+					#ylims = (0, maximum(result_df.eff) * 1.1),
+                	label = labels[i])
+
+    	# Add a smooth line through the points
+   		p = plot!(p, result_df.eblob2, result_df.eff,
+          	line = :solid,
+          	linewidth = 2,
+          	label = nothing,
+          	color = :blue,
+          	alpha = 0.5)
+	end
+
+    # Add percentage labels on secondary y-axis
+    plot!(p, yticks = (0:0.1:1.0, ["$(Int(y*100))%" for y in 0:0.1:1.0]))
+
+    return p
+end
+
+
+# ╔═╡ d61ec9b7-4922-45de-9b6f-e0a9f4386740
+md"""
+## Analysis
+"""
+
+# ╔═╡ f4e98f28-5f3a-49f5-a053-8ed532e92a60
+begin
+	vhe = voxel_size(0.75, 1.6, 15.0, 100.0)
+	md"""
+	- voxel size for 10 % He = $@sprintf("%.1e", vhe) mm
+	"""
+end
+
+# ╔═╡ 8fc7e228-fb0d-4c6c-ace9-8f6cb057a989
 begin
 	erex = 12.5 # keV
 	rblob = 10.0 # mm
@@ -78,72 +275,263 @@ begin
 	"""
 end
 
-# ╔═╡ 8290afe2-e5cb-4793-b108-a313f2677119
-md"""
-## Bi-214
-"""
-
-# ╔═╡ 5bcffb43-a8f7-448f-86c2-f3261d489bbf
-md""" 
-- E, X, Y, Z
-"""
-
-# ╔═╡ 84e6f57f-50a7-43fc-82a4-4ef238449fc7
-md"""
-- voxel size for 10 % He
-"""
-
-# ╔═╡ 982a3890-7318-4034-b7fd-decafc288362
-function voxel_size(dx, dy, p, l)
-	sqrt(l)*(dx + dy) /(2.0*sqrt(p))
+# ╔═╡ 22c204c8-9e36-41e0-a0d4-0b86c689739c
+begin
+	confCut= 0.40
+	trklCut = 10.0
+	eblb2Max = 1000.0
+	md"""
+	- Confidence cut = $(confCut)
+	- Track Length  cut = $(trklCut)
+	- Max energy of Blob 2 = $(eblb2Max)
+	"""
 end
 
-# ╔═╡ b7e69022-a4d9-4d4b-841f-9257bffe0b07
-vhe = voxel_size(0.75, 1.6, 15.0, 100.0)
+# ╔═╡ de068020-a64c-43b4-9e78-8ade8a4f6274
+begin
+	fnBi = "blobsBi.csv"
+	fnTl = "blobsTl.csv"
+	fnBB = "blobsBB.csv"
+	fnXe = "blobsXe.csv"
+	md"""
+	- file blobs Bi214 = $(fnBi)
+	- file blobs Tl208 = $(fnTl)
+	- file blobs bb0nu = $(fnBB)
+	- file blobs Xe-137 = $(fnXe)
+	"""
+end
+
+# ╔═╡ b5f850b0-19ec-4e96-96cc-4c43a91e05f3
+begin
+	trksBiCopper = jn.Petit.get_bkgnd_tracks(cmdir, isotope="bi214", 
+						             bkgnd="copperbkg", 
+						             tag="*st3mm*")
+	effBiCopper = jn.Petit.Eff(trksBiCopper.n1trk/trksBiCopper.ntot, 1.0, 1.0, 1.0)
+
+	trksBiInner = jn.Petit.get_bkgnd_tracks(cmdir, isotope="bi214", 
+						             bkgnd="innerbkg", 
+						             tag="*st3mm*")
+	effBiInner = jn.Petit.Eff(trksBiInner.n1trk/trksBiInner.ntot, 1.0, 1.0, 1.0)
+	
+	md"""
+	### Bi 214
+	#### Copper
+	- Total number of events generated = $@sprintf("%.2e", trksBiCopper.ntot)  
+	- Total number of events 1 trk  = $(trksBiCopper.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effBiCopper.eff1tr) 
+
+	#### Inner
+	- Total number of events generated = $@sprintf("%.2e", trksBiInner.ntot)  
+	- Total number of events 1 trk  = $(trksBiInner.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effBiInner.eff1tr) 
+	"""
+end
 
 # ╔═╡ a60ea1b2-1c4c-4565-ac34-d2580dd016e3
 md"""
 ### Build Tracks: example
 """
 
-# ╔═╡ 03cd5a27-1ace-43b3-8a31-4e34629b082d
-md"""
-### Find blobs: example
-"""
-
 # ╔═╡ 99258d62-017c-45e2-b9e5-63da00815166
 md"""
-#### Compute E, TRKL, EBLOB1, EBLOB2 for all tracks
+#### Compute Eblobs for all tracks
 """
+
+# ╔═╡ 4f254ee3-c000-4c49-9f6b-0d7ef947c67d
+md"Run blob analysis for Bi214? $(@bind babi CheckBox(default=false))"
+
+# ╔═╡ bc7634bf-2d76-4966-95c1-70d3ea97e0ff
+blobsBi = CSV.read(fnBi, DataFrame)
+
+# ╔═╡ 067d7785-ce69-4cb6-b783-9fbeab4b9f32
+begin
+	hEnergyBiTrue, pEnergyBiTrue = jn.Petit.step_hist(collect(blobsBi.energyKeV);
+	                                                 nbins = 40,
+										             xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " E (keV)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	_, pConfidence = jn.Petit.step_hist(collect(blobsBi.confidence);
+	                                                 nbins = 20,
+										             xlim   = (0.0, 1.0),
+	                                                 xlabel = " Confidence ",
+	                                                 ylabel = "Frequency",
+	                                                 title=" Fit confidence")
+	_, pTrkL = jn.Petit.step_hist(collect(blobsBi.trackLength);
+	                                                 nbins = 40,
+										             #xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " Track Length (mm)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	eBi = jn.Petit.smear_histogram(hEnergyBiTrue, erex)
+	
+	hEnergyBi, pEnergyBi = jn.Petit.step_hist(eBi;
+                                              nbins = 40,
+                                              xlim   = (2300.0, 2700.0),
+                                              xlabel = " E (keV)",
+                                              ylabel = "Frequency",
+                                              title=" Bi 214 E ")
+	plot(pEnergyBiTrue, pEnergyBi, pConfidence, pTrkL )
+end
+
+# ╔═╡ c5374971-03ed-4bec-88b6-e636ac400348
+md"""
+#### Clean up 
+- Reject tracks with confidence > $(confCut) 
+- Reject tracks with track length < $(trklCut) 
+- Reject tracks with track E blob2 > $(eblb2Max) 
+"""
+
+# ╔═╡ 73cb4e71-d232-4c97-ba8f-27d170823073
+begin
+	fgbi, pfgbi =jn.Petit.plot_fit_gauss(eBi, "Track Energy", "Counts",
+                        30, 2400.0, 2500.0;
+                        xgmin=2400.0, xgmax=2500.0, gbins=30)
+	plot(pfgbi)
+end
+
+# ╔═╡ 046ec784-bc63-4dde-920d-36fc85f1ee8e
+
+
+# ╔═╡ 48b32bbf-abbb-480e-9ba0-0df5f0777336
+begin
+	trksTlCopper = jn.Petit.get_bkgnd_tracks(cmdir, isotope="tl208", 
+						             bkgnd="copperbkg", 
+						             tag="*st3mm*")
+	effTlCopper = jn.Petit.Eff(trksTlCopper.n1trk/trksTlCopper.ntot, 1.0, 1.0, 1.0)
+
+	trksTlInner = jn.Petit.get_bkgnd_tracks(cmdir, isotope="tl208", 
+						             bkgnd="innerbkg", 
+						             tag="*st3mm*")
+	effTlInner = jn.Petit.Eff(trksTlInner.n1trk/trksTlInner.ntot, 1.0, 1.0, 1.0)
+	
+	md"""
+	### Tl 208
+	#### Copper
+	- Total number of events generated = $@sprintf("%.2e", trksTlCopper.ntot)  
+	- Total number of events 1 trk  = $(trksTlCopper.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effTlCopper.eff1tr) 
+
+	#### Inner
+	- Total number of events generated = $@sprintf("%.2e", trksTlInner.ntot)  
+	- Total number of events 1 trk  = $(trksTlInner.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effTlInner.eff1tr) 
+	"""
+end
+
+# ╔═╡ 9cd7ccf0-a4e7-4445-a6b1-78ffa573eb3b
+md"Run blob analysis for Bi214? $(@bind batl CheckBox(default=false))"
+
+
+# ╔═╡ 37a7d81a-ca8e-4ac5-b2ca-04b261beaddb
+blobsTl = CSV.read(fnTl, DataFrame)
+
+# ╔═╡ 01297be8-6234-4bae-91d5-963891b755ef
+begin
+	hEnergyTlTrue, pEnergyTlTrue = jn.Petit.step_hist(collect(blobsTl.energyKeV);
+	                                                 nbins = 40,
+										             xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " E (keV)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	_, pConfidence2 = jn.Petit.step_hist(collect(blobsTl.confidence);
+	                                                 nbins = 20,
+										             xlim   = (0.0, 1.0),
+	                                                 xlabel = " Confidence ",
+	                                                 ylabel = "Frequency",
+	                                                 title=" Fit confidence")
+	_, pTrkL2 = jn.Petit.step_hist(collect(blobsTl.trackLength);
+	                                                 nbins = 40,
+										             #xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " Track Length (mm)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	eTl = jn.Petit.smear_histogram(hEnergyTlTrue, erex)
+	
+	hEnergyTl, pEnergyTl = jn.Petit.step_hist(eTl;
+                                              nbins = 40,
+                                              xlim   = (2300.0, 2700.0),
+                                              xlabel = " E (keV)",
+                                              ylabel = "Frequency",
+                                              title=" Tl 208 E ")
+	plot(pEnergyTlTrue, pEnergyTl, pConfidence2, pTrkL2 )
+end
 
 # ╔═╡ 2e1c70e9-6ecf-4e97-8705-6342028285aa
 md"""
 ## bb0nu
 """
 
+# ╔═╡ a6e42cf4-1389-497f-90da-1df8297cec74
+begin
+	trksbb = jn.Petit.get_bb0nu_tracks(cmdir)
+	#trksbb.ntot = trksbb.metas[1]["events_processed"]
+
+	effBB = jn.Petit.Eff(trksbb.n1trk/trksbb.ntot, 1.0, 1.0, 1.0)
+	
+	md"""
+	- Total number of bb0nu events generated = $(trksbb.ntot)
+	- Total number of bb0nu events 1 trk  = $(trksbb.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effBB.eff1tr) 
+	"""
+end
+
+# ╔═╡ f7b87c23-dee5-462d-b4b9-b964947b9ca7
+md"Run blob analysis for bb0nu? $(@bind babb CheckBox(default=false))"
+
+
+# ╔═╡ 18d8eaa0-5467-4123-bfc8-f52f377e7c72
+blobsBB = CSV.read(fnBB, DataFrame)
+
+# ╔═╡ ac45ca81-79bc-4631-bf37-c08bbbf6159e
+begin
+	hEnergyBBTrue, pEnergyBBTrue = jn.Petit.step_hist(collect(blobsBB.energyKeV);
+	                                                 nbins = 40,
+										             xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " E (keV)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	_, pConfidence3 = jn.Petit.step_hist(collect(blobsBB.confidence);
+	                                                 nbins = 20,
+										             xlim   = (0.0, 1.0),
+	                                                 xlabel = " Confidence ",
+	                                                 ylabel = "Frequency",
+	                                                 title=" Fit confidence")
+	_, pTrkL3 = jn.Petit.step_hist(collect(blobsBB.trackLength);
+	                                                 nbins = 40,
+										             #xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " Track Length (mm)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	eBB = jn.Petit.smear_histogram(hEnergyBBTrue, erex)
+	
+	hEnergyBB, pEnergyBB = jn.Petit.step_hist(eBB;
+                                              nbins = 40,
+                                              xlim   = (2300.0, 2700.0),
+                                              xlabel = " E (keV)",
+                                              ylabel = "Frequency",
+                                              title=" Bi 214 E ")
+	plot(pEnergyBBTrue, pEnergyBB, pConfidence3, pTrkL3 )
+end
+
+# ╔═╡ 6ea54a0d-8b35-47d9-ac29-43b8f1d103db
+begin
+	fgBB, pfgBB =jn.Petit.plot_fit_gauss(eBB, "Track Energy", "Counts",
+                        30, 2400.0, 2500.0;
+                        xgmin=2400.0, xgmax=2500.0, gbins=30)
+	plot(pfgBB)
+end
+
+
 # ╔═╡ ffb9d0d1-bca6-4b9a-87a7-e8c6280488fa
 md"""
 ## Signal and background efficiency
-"""
-
-# ╔═╡ d3fd5874-8de1-451c-89b1-3dc05a65cef4
-md"""
-## Bi-214 and bbonu efficiencies
-"""
-
-# ╔═╡ e0a4575c-afd3-4619-8fad-e321d573d1ec
-md"""
-## Tl208
-"""
-
-# ╔═╡ bd5f963d-e833-41a0-a46f-f014f47dd1ca
-md"""
-#### Energy cut
-"""
-
-# ╔═╡ a77652cb-6ab9-4f85-b8a2-5a21607444cd
-md"""
-#### Blob cuts
 """
 
 # ╔═╡ 0397d23d-6c74-484b-9c8a-3989bab21239
@@ -151,15 +539,87 @@ md"""
 ## Xe-137
 """
 
-# ╔═╡ ad4d3db9-43f6-48ee-84ba-a5a360cb258b
+# ╔═╡ d7729d46-79ac-48c2-948a-41c91f78e2e3
+begin
+	trksxe =  jn.Petit.get_xe137_tracks(cmdir)
+	effXe = jn.Petit.Eff(trksxe.n1trk/trksxe.ntot, 1.0, 1.0, 1.0)
+	
+	md"""
+	- Total number of Xe-137 events generated = $(trksxe.ntot)
+	- Total number of Xe-137 events 1 trk  = $(trksxe.n1trk)
+	- Selection efficiency: $@sprintf("%.2e", effXe.eff1tr) 
+	"""
+end
+
+# ╔═╡ 2f87d310-8d44-4649-9dfb-440e160a24f4
+md"Run blob analysis for xe137? $(@bind baxe CheckBox(default=false))"
+
+
+# ╔═╡ 10a4a567-6337-418b-a70e-97647af0177b
+blobsXe = CSV.read(fnXe, DataFrame)
+
+# ╔═╡ f333b7c7-bebb-47da-bbfc-b350f0f34a0d
+begin
+	hEnergyXeTrue, pEnergyXeTrue = jn.Petit.step_hist(collect(blobsXe.energyKeV);
+	                                                 nbins = 40,
+										             xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " E (keV)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	_, pConfidence4 = jn.Petit.step_hist(collect(blobsXe.confidence);
+	                                                 nbins = 20,
+										             xlim   = (0.0, 1.0),
+	                                                 xlabel = " Confidence ",
+	                                                 ylabel = "Frequency",
+	                                                 title=" Fit confidence")
+	_, pTrkL4 = jn.Petit.step_hist(collect(blobsXe.trackLength);
+	                                                 nbins = 40,
+										             #xlim   = (2300.0, 2700.0),
+	                                                 xlabel = " Track Length (mm)",
+	                                                 ylabel = "Frequency",
+	                                                 title=" E true (keV)")
+	
+	eXe = jn.Petit.smear_histogram(hEnergyXeTrue, erex)
+	
+	hEnergyXe, pEnergyXe = jn.Petit.step_hist(eXe;
+                                              nbins = 40,
+                                              xlim   = (2300.0, 2700.0),
+                                              xlabel = " E (keV)",
+                                              ylabel = "Frequency",
+                                              title=" Xe-136E ")
+	plot(pEnergyXeTrue, pEnergyXe, pConfidence4, pTrkL4 )
+end
+
+# ╔═╡ f15ad4b6-873a-4ce3-8321-5a38e9704df2
 md"""
-#### Blob cuts
+### Blob efficiencies
 """
 
 # ╔═╡ d0f9e26b-2a3c-42a4-a826-7c8694f5d470
 md"""
 # Functions
 """
+
+# ╔═╡ 8756b4ca-011b-4a6a-aff6-22488c8ac854
+function eff_ecut(effbb, effbkg, ffbkg)
+	effbb = effe0b.eff
+	effbi = effbkg.eff
+	energies = effe0b.eblob2
+	
+	d = Poisson.(ffbkg*effbi)
+	fom  = effbb./std.(d) 
+
+	pfom = plot(energies, fom,
+                marker=:circle, markersize=5, lw=2,
+                label="FOM ",
+                xlabel="Step", ylabel="fom",
+                title="FOM Curve",
+                legend=:topright, ylim=(0, 1.5))
+
+	return fom, pfom
+
+end
 
 # ╔═╡ f0ace932-f1d1-4e2b-9a6d-88b2cea4d849
 function gaussian_efficiency_analysis(μ1::Float64, μ2::Float64, 
@@ -268,53 +728,6 @@ function get_bi214_tracks()
 	return tracks, metadatas, nxbi214, length(tracks)
 end
 
-# ╔═╡ b5f850b0-19ec-4e96-96cc-4c43a91e05f3
-begin
-	trkb214, metabi214,  nbi214tot, nbi2141t  =  get_bi214_tracks()
-	
-	md"""
-	- Total number of Bi-214 events generated = $(nbi214tot)
-	- Total number of Bi-214 events 1 trk  = $(nbi2141t)
-	"""
-end
-
-# ╔═╡ ce0c0477-0b99-400a-a85e-f8e6cad5e094
-begin
-	xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev=find_track_extremes(trkb214, i=i)
-	md"""
-	#### Find track Extremes
-	- confidence = $(xresult.confidence)
-	- start voxel: x = $(xstart_voxel.x), y = $(xstart_voxel.y), z = $(xstart_voxel.z)
-	- end voxel: x = $(xend_voxel.x), y = $(xend_voxel.y), z = $(xend_voxel.z)
-	- track length L =$(xtrack_length)
-	- energy = $(energy_kev) KeV
-	"""
-end
-
-# ╔═╡ bf77b535-485a-4608-aa4b-1c15950f3f9b
-begin
-	
-	blobs = jn.Petit.energy_in_spheres_around_extremes(trkb214[i], xresult, rblob)
-	eb1 = blobs.blob1_energy * 1e+3
-	eb2 = blobs.blob2_energy * 1e+3
-	nb1 = blobs.blob1_voxel_count
-	nb2 = blobs.blob2_voxel_count
-	md"""
-	- blob 1 energy = $(round(eb1, digits=1)) keV
-	- blob 2 energy = $(round(eb2, digits=1)) keV
-	- blob 1 # of voxels = $(nb1)
-	- blob 2 # of voxels = $(nb2)
-	"""
-end
-
-# ╔═╡ 1c202304-d6ca-4dde-a7ac-f5cb2b961b93
-jn.Petit.plot_track_blobs(trkb214[i], rblob;
-                         markersize_voxels=3.0,
-                         show_connections=true,
-                         alpha_connections=0.2,
-                         alpha_spheres=0.3,
-                         sphere_resolution=20)
-
 # ╔═╡ 7dad709c-17e9-4738-b6c0-6d0c9bd70f09
 function get_tl208_tracks(;bkgnd::String ="copperbkg", tag::String ="*st3mm.b*")
 
@@ -330,61 +743,8 @@ function get_tl208_tracks(;bkgnd::String ="copperbkg", tag::String ="*st3mm.b*")
 	return tracks, metadatas, ntot, length(tracks)
 end
 
-# ╔═╡ 4853838b-7292-49ad-b3d8-f116a69da7d6
-begin
-	trktl1, metatl1, ntltot1, ntl1t1 =  get_tl208_tracks(bkgnd="copperbkg", tag="*st3mm.b*")
-
-	trktl2, metatl2, ntltot2, ntl1t2 =  get_tl208_tracks(bkgnd="innerbkg", tag="*st3mm.b*")
-
-	trktl = vcat(trktl1, trktl2)
-	ntltot = ntltot1 + ntltot2 
-	ntl1t = ntl1t1 + ntl1t2
-	
-	md"""
-	- Total number of tl208 events generated in copper = $@sprintf("%.3e", ntl1t1) 
-	- Total number of tl208 events 1 trk from copper  = $(ntltot1)
-	- Total number of tl208 events generated in inner = $(ntl1t2)
-	- Total number of tl208 events (inner) 1 trk  = $(ntltot2)
-	- Total number of tl208 1 trk in detector = $(length(trktl))
-	"""
-end
-
-# ╔═╡ 25650a53-6284-4c57-a590-71283d15a3fd
-begin
-	xresulttl, xstart_voxeltl, xend_voxeltl, xtrack_lengthtl, energy_kevtl=find_track_extremes(trktl, i=i)
-	md"""
-	#### Find track Extremes
-	- confidence = $(xresulttl.confidence)
-	- start voxel: x = $(xstart_voxeltl.x), y = $(xstart_voxeltl.y), z = $(xstart_voxeltl.z)
-	- end voxel: x = $(xend_voxeltl.x), y = $(xend_voxeltl.y), z = $(xend_voxeltl.z)
-	- track length L =$(xtrack_lengthtl)
-	- energy = $(energy_kevtl) keV
-	"""
-end
-
-# ╔═╡ ede62a96-39b6-4d2b-ab8a-528048c56556
-begin
-	
-	blobstl = jn.Petit.energy_in_spheres_around_extremes(trktl[i], xresulttl, rblob)
-	etlb1 = blobstl.blob1_energy * 1e+3
-	etlb2 = blobstl.blob2_energy * 1e+3
-	ntlb1 = blobstl.blob1_voxel_count
-	ntlb2 = blobstl.blob2_voxel_count
-	md"""
-	- blob 1 energy = $(round(etlb1, digits=1)) keV
-	- blob 2 energy = $(round(etlb2, digits=1)) keV
-	- blob 1 # of voxels = $(ntlb1)
-	- blob 2 # of voxels = $(ntlb2)
-	"""
-end
-
-# ╔═╡ e7e8e6a4-f101-4f55-b8bf-fb9ffd5fa023
-jn.Petit.plot_track_blobs(trktl[i], rblob;
-                         markersize_voxels=3.0,
-                         show_connections=true,
-                         alpha_connections=0.2,
-                         alpha_spheres=0.3,
-                         sphere_resolution=20)
+# ╔═╡ 4f78d979-f707-44f9-892d-e278937c7c7e
+cmdir
 
 # ╔═╡ 883c8a64-9cc2-4a89-95d5-4e906a903954
 function get_xe137_tracks()
@@ -396,52 +756,6 @@ function get_xe137_tracks()
 	## large file in small segments, unlike the case for Bi214
 	return tracks, metadatas, ntl208, length(tracks)
 end
-
-# ╔═╡ d7729d46-79ac-48c2-948a-41c91f78e2e3
-begin
-	trk1e, meta1e, n1etot, n1e1t =  get_xe137_tracks()
-	md"""
-	- Total number of tl208 events generated = $(n1e1t)
-	- Total number of tl208 events 1 trk  = $(n1etot)
-	"""
-end
-
-# ╔═╡ 4478f154-a096-4bdb-a758-c1e300a1de45
-begin
-	xresult1e, xstart_voxel1e, xend_voxel1e, xtrack_length1e, energy_kev1e=find_track_extremes(trk1e, i=i)
-	md"""
-	#### Find track Extremes
-	- confidence = $(xresult1e.confidence)
-	- start voxel: x = $(xstart_voxel1e.x), y = $(xstart_voxel1e.y), z = $(xstart_voxel1e.z)
-	- end voxel: x = $(xend_voxel1e.x), y = $(xend_voxel1e.y), z = $(xend_voxel1e.z)
-	- track length L =$(xtrack_length1e)
-	- energy = $(energy_kev1e) keV
-	"""
-end
-
-# ╔═╡ a7d23b8d-0854-4751-a216-d519e85e2d8b
-begin
-	
-	blobs1e = jn.Petit.energy_in_spheres_around_extremes(trk1e[i], xresult1e, rblob)
-	e1eb1 = blobs1e.blob1_energy * 1e+3
-	e1eb2 = blobs1e.blob2_energy * 1e+3
-	n1eb1 = blobs1e.blob1_voxel_count
-	n1eb2 = blobs1e.blob2_voxel_count
-	md"""
-	- blob 1 energy = $(round(e1eb1, digits=1)) keV
-	- blob 2 energy = $(round(e1eb2, digits=1)) keV
-	- blob 1 # of voxels = $(n1eb1)
-	- blob 2 # of voxels = $(n1eb2)
-	"""
-end
-
-# ╔═╡ 63fcc371-d276-4e15-b812-da1974b22df3
-jn.Petit.plot_track_blobs(trk1e[i], rblob;
-                         markersize_voxels=3.0,
-                         show_connections=true,
-                         alpha_connections=0.2,
-                         alpha_spheres=0.3,
-                         sphere_resolution=20)
 
 # ╔═╡ 75f229f8-1a11-4b9a-9ef6-331e98177caa
 function get_tracks(path; voxel="3mm")
@@ -455,74 +769,8 @@ function get_tracks(path; voxel="3mm")
 	return tracks, metadatas, nxbi214, length(tracks)
 end
 
-# ╔═╡ a6e42cf4-1389-497f-90da-1df8297cec74
-begin
-	trkbb, metabb, nbbtot, nbbb1t =  get_tracks("/Users/jjgomezcadenas/Data/HD5t/precdr/bb0nu")
-
-	nbbtot = 1000 # only read 1000 events from bb0nu file
-	md"""
-	- Total number of bb0nu events generated = $(nbbb1t)
-	- Total number of bb0nu events 1 trk  = $(nbbtot)
-	"""
-end
-
-# ╔═╡ c8bf9933-3676-4b6f-b1c4-9fe73036b8f2
-begin
-	
-	xresultb0, xstart_voxelb0, xend_voxelb0, xtrack_lengthb0, energy_kevb0=find_track_extremes(trkbb, i=i)
-	md"""
-	#### Find track Extremes
-	- confidence = $(xresultb0.confidence)
-	- start voxel: x = $(xstart_voxelb0.x), y = $(xstart_voxelb0.y), z = $(xstart_voxelb0.z)
-	- end voxel: x = $(xend_voxelb0.x), y = $(xend_voxelb0.y), z = $(xend_voxelb0.z)
-	- track length L =$(xtrack_lengthb0)
-	- energy = $(energy_kevb0) keV
-	"""
-end
-
-# ╔═╡ db13c2ed-535b-4beb-9c71-bdb7f9fbd2c1
-begin
-	
-	blobsb0 = jn.Petit.energy_in_spheres_around_extremes(trkbb[i], xresultb0, rblob)
-	ebb1 = blobsb0.blob1_energy * 1e+3
-	ebb2 = blobsb0.blob2_energy * 1e+3
-	nbb1 = blobsb0.blob1_voxel_count
-	nbb2 = blobsb0.blob2_voxel_count
-	md"""
-	- blob 1 energy = $(round(ebb1, digits=1)) keV
-	- blob 2 energy = $(round(ebb2, digits=1)) keV
-	- blob 1 # of voxels = $(nbb1)
-	- blob 2 # of voxels = $(nbb2)
-	"""
-end
-
-# ╔═╡ b6353c16-9a6c-474c-84c2-dc8baf0c2dfa
-jn.Petit.plot_track_blobs(trkbb[i], rblob;
-                         markersize_voxels=3.0,
-                         show_connections=true,
-                         alpha_connections=0.2,
-                         alpha_spheres=0.3,
-                         sphere_resolution=20)
-
 # ╔═╡ 32f432a9-68c1-4a65-9b98-8f0174bf08ae
-function histo_b1_b2(xeb1, xeb2, xcon; xcut=0.7)
-	yeb1 = xeb1[xcon .> xcut]
-	yeb2 = xeb2[xcon .> xcut]
-	h_b1, p_b1 = jn.Petit.step_hist(yeb1;
-	         nbins = 20,
-	        #xlim   = (0.0, 1.0),
-	         xlabel = "Eb1",
-	        ylabel = "Frequency",
-	         title=" Eb1 ")
-	h_b2, p_b2 = jn.Petit.step_hist(yeb2;
-	         nbins = 20,
-	        #xlim   = (0.0, 1.0),
-	         xlabel = "Eb2",
-	        ylabel = "Frequency",
-	         title=" Eb2 ")
-	
-	plot(p_b1, p_b2)
-end
+
 
 # ╔═╡ b59257e9-9a5e-467f-bbc3-f04cdf0e9a75
 function histo_energy_trkl_conf(xcon, xtl, xe)
@@ -546,6 +794,14 @@ function histo_energy_trkl_conf(xcon, xtl, xe)
 	         title=" E (keV)")
 	return h_ek, p_ek, p_c, p_tl
 end
+
+# ╔═╡ a8d1a7d5-bfaa-4430-abde-01b167249f29
+
+
+# ╔═╡ 98033f21-5720-4d22-94a8-a72e650a860b
+
+	
+
 
 # ╔═╡ 94e6ae79-2d97-461a-8a3a-bf100bb1771e
 function histo_xyz(X,Y,Z,sample)
@@ -580,6 +836,9 @@ function histo_xyz(X,Y,Z,sample)
 	 plot(px, py, pz, pxy, layout=(2,2), size=(1400, 800))
 end
 
+# ╔═╡ 2de993fe-47dc-459d-8000-708d85ed425f
+
+
 # ╔═╡ a1bac832-78d3-4ff5-8e05-bc8fc0eeef91
 function histo_trak_energy(etrk, title; emin=2300.0, emax=2700.0)
 	_, pe = jn.Petit.step_hist(etrk;
@@ -605,29 +864,302 @@ function track_positions(tracks)
 	X,Y,Z
 end
 
-# ╔═╡ 24518656-35e4-48ff-9b1e-7da70c3a5994
+# ╔═╡ 9bd589eb-0bbd-4964-b4ba-8a6f8cb7b38b
 begin
+	trkb214 = vcat(trksBiCopper.tracks, trksBiInner.tracks)
+	ntrBi = jn.Petit.NTRKS(length(trkb214), 1, 1, 1) 
+	effBi = jn.Petit.Eff(1.0, 1.0, 1.0, 1.0)
 	Xbi, Ybi, Zbi =track_positions(trkb214)
 	histo_xyz(Xbi,Ybi,Zbi,"Bi214")
+	#ebi = track_energies_keV(trkb214)
+	#histo_trak_energy(ebi, "Bi214-Energy")
 end
 
-# ╔═╡ 00c71b09-25bc-41a3-b621-929caaddd626
+# ╔═╡ ce0c0477-0b99-400a-a85e-f8e6cad5e094
+let
+	xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev=find_track_extremes(trkb214, i=i)
+	blobs = jn.Petit.energy_in_spheres_around_extremes(trkb214[i], xresult, rblob)
+	eb1 = blobs.blob1_energy * 1e+3
+	eb2 = blobs.blob2_energy * 1e+3
+	nb1 = blobs.blob1_voxel_count
+	nb2 = blobs.blob2_voxel_count
+	md"""
+	#### Find blobs: Example 
+	- confidence = $(xresult.confidence)
+	- start voxel: x = $(xstart_voxel.x), y = $(xstart_voxel.y), z = $(xstart_voxel.z)
+	- end voxel: x = $(xend_voxel.x), y = $(xend_voxel.y), z = $(xend_voxel.z)
+	- track length L =$(xtrack_length)
+	- energy = $(energy_kev) KeV
+	- blob 1 energy = $(round(eb1, digits=1)) keV
+	- blob 2 energy = $(round(eb2, digits=1)) keV
+	- blob 1 # of voxels = $(nb1)
+	- blob 2 # of voxels = $(nb2)
+	"""
+end
+
+# ╔═╡ 1c202304-d6ca-4dde-a7ac-f5cb2b961b93
+jn.Petit.plot_track_blobs(trkb214[i], rblob;
+                         markersize_voxels=3.0,
+                         show_connections=true,
+                         alpha_connections=0.2,
+                         alpha_spheres=0.3,
+                         sphere_resolution=20)
+
+# ╔═╡ 403b3c7f-d7c3-4762-8605-5d24fb087415
+if babi
+	let
+		blobsBi = jn.Petit.blob_analysis(trkb214, rblob)
+		jn.Petit.write_blobs_csv(blobsBi, fnBi)
+	end
+end
+
+# ╔═╡ 898274d5-9add-4b0b-bf04-724bc6e06074
 begin
-	Xbb, Ybb, Zbb =track_positions(trkbb)
+  blobsBiFid = blobsBi[(blobsBi.confidence .> confCut) .& (blobsBi.trackLength .> trklCut) .& (blobsBi.eB2 .< eblb2Max), :]
+	
+	ntrBi.nfid = size(blobsBiFid)[1]
+	effBi.efffid = ntrBi.nfid/ntrBi.ntot
+end
+
+
+
+# ╔═╡ d4bba489-68d1-4a21-994b-aebbb50fe601
+begin
+	histo_b1_b2(blobsBiFid.eB1, blobsBiFid.eB2)
+end
+
+# ╔═╡ 10ed8e9a-e5f4-4652-9f1d-8e59eb605c95
+begin
+	trktl208 = vcat(trksTlCopper.tracks, trksTlInner.tracks)
+	ntrTl = jn.Petit.NTRKS(length(trktl208), 1, 1, 1) 
+	effTl = jn.Petit.Eff(1.0, 1.0, 1.0, 1.0)
+	XTl, YTl, ZTl =track_positions(trktl208)
+	histo_xyz(XTl,YTl,ZTl,"Tl208")
+end
+
+# ╔═╡ ba010d8d-f836-4517-b9e3-3f154ce88497
+let
+	xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev=find_track_extremes(trktl208, i=i)
+	blobs = jn.Petit.energy_in_spheres_around_extremes(trktl208[i], xresult, rblob)
+	eb1 = blobs.blob1_energy * 1e+3
+	eb2 = blobs.blob2_energy * 1e+3
+	nb1 = blobs.blob1_voxel_count
+	nb2 = blobs.blob2_voxel_count
+	md"""
+	#### Find blobs: Example 
+	- confidence = $(xresult.confidence)
+	- start voxel: x = $(xstart_voxel.x), y = $(xstart_voxel.y), z = $(xstart_voxel.z)
+	- end voxel: x = $(xend_voxel.x), y = $(xend_voxel.y), z = $(xend_voxel.z)
+	- track length L =$(xtrack_length)
+	- energy = $(energy_kev) KeV
+	- blob 1 energy = $(round(eb1, digits=1)) keV
+	- blob 2 energy = $(round(eb2, digits=1)) keV
+	- blob 1 # of voxels = $(nb1)
+	- blob 2 # of voxels = $(nb2)
+	"""
+end
+
+# ╔═╡ e32cb510-5628-440b-a3ed-a02c0f27005e
+jn.Petit.plot_track_blobs(trktl208[i], rblob;
+                         markersize_voxels=3.0,
+                         show_connections=true,
+                         alpha_connections=0.2,
+                         alpha_spheres=0.3,
+                         sphere_resolution=20)
+
+# ╔═╡ 4bcf1a8b-7101-41e9-bb30-9874275c20a6
+if batl
+	let
+		blobsTl = jn.Petit.blob_analysis(trktl208, rblob)
+		jn.Petit.write_blobs_csv(blobsTl, fnTl)
+	end
+end
+
+# ╔═╡ 9d7572dd-1ebe-426d-a8f9-3dd540775733
+begin
+  blobsTlFid = blobsTl[(blobsTl.confidence .> confCut) .& (blobsTl.trackLength .> trklCut) .& (blobsTl.eB2 .< eblb2Max), :]
+	
+	ntrTl.nfid = size(blobsTlFid)[1]
+	effTl.efffid = ntrTl.nfid/ntrTl.ntot
+end
+
+# ╔═╡ aa3c48c6-3c83-47c3-ac59-ce12de38c371
+begin
+	histo_b1_b2(blobsTlFid.eB1, blobsTlFid.eB2)
+end
+
+# ╔═╡ 4eeabfad-fb46-4d90-a586-aaf712c9eb47
+let
+	copy_eff!(effBiCopper , effBi)
+	copy_eff!(effBiInner , effBi)
+	copy_eff!(effTlCopper , effTl)
+	copy_eff!(effTlInner , effTl)
+	#println("effBiCopper ->",effBiCopper)
+	#println("effBiInner ->",effBiInner)
+	#println("effTlCopper ->",effTlCopper)
+	#println("effTlInner ->",effTlInner)
+
+	eff_bi_copper = total_eff(effBiCopper)
+	eff_bi_inner = total_eff(effBiInner)
+	eff_tl_copper = total_eff(effTlCopper)
+	eff_tl_inner = total_eff(effTlInner)
+	eff_bb0 = total_eff(effBB)
+	md"""
+	#### Efficiencies for signal and background:
+	- signal = $@sprintf("%.2e", eff_bb0)
+	- bi from copper = $@sprintf("%.2e", eff_bi_copper)
+	- bi from inner = $@sprintf("%.2e", eff_bi_inner)
+	- tl from copper = $@sprintf("%.2e", eff_tl_copper)
+	- tl from inner = $@sprintf("%.2e", eff_tl_inner)
+	"""
+end
+
+# ╔═╡ d7648894-3e02-47ca-af42-a288190f699d
+let
+	copy_eff!(effBiCopper , effBi)
+	copy_eff!(effBiInner , effBi)
+	copy_eff!(effTlCopper , effTl)
+	copy_eff!(effTlInner , effTl)
+	
+
+	eff_bi_copper = total_eff(effBiCopper)
+	eff_bi_inner = total_eff(effBiInner)
+	eff_tl_copper = total_eff(effTlCopper)
+	eff_tl_inner = total_eff(effTlInner)
+	eff_xe = total_eff(effXe)
+	eff_bb0 = total_eff(effBB)
+	md"""
+	#### Efficiencies for signal and background:
+	- signal = $@sprintf("%.2e", eff_bb0)
+	- Xe137 = $@sprintf("%.2e", eff_xe)
+	- bi from copper = $@sprintf("%.2e", eff_bi_copper)
+	- bi from inner = $@sprintf("%.2e", eff_bi_inner)
+	- tl from copper = $@sprintf("%.2e", eff_tl_copper)
+	- tl from inner = $@sprintf("%.2e", eff_tl_inner)
+	"""
+end
+
+# ╔═╡ 759c3202-b6b7-45e7-ab11-75ed778273f7
+begin
+	trksbb0 = trksbb.tracks
+	ntrBB = jn.Petit.NTRKS(length(trksbb0), 1, 1, 1) 
+	Xbb, Ybb, Zbb =track_positions(trksbb0)
 	histo_xyz(Xbb,Ybb,Zbb,"bb0nu")
 end
 
-# ╔═╡ 887e37cd-8e50-44c3-b239-1936a9b0baef
-begin
-	Xtl, Ytl, Ztl =track_positions(trktl)
-	histo_xyz(Xtl,Ytl,Ztl,"Tl208")
+# ╔═╡ f398f371-5271-4af7-965b-73a7027eff0b
+let
+	xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev=find_track_extremes(trksbb0, i=i)
+	blobs = jn.Petit.energy_in_spheres_around_extremes(trksbb0[i], xresult, rblob)
+	eb1 = blobs.blob1_energy * 1e+3
+	eb2 = blobs.blob2_energy * 1e+3
+	nb1 = blobs.blob1_voxel_count
+	nb2 = blobs.blob2_voxel_count
+	md"""
+	#### Find blobs: Example 
+	- confidence = $(xresult.confidence)
+	- start voxel: x = $(xstart_voxel.x), y = $(xstart_voxel.y), z = $(xstart_voxel.z)
+	- end voxel: x = $(xend_voxel.x), y = $(xend_voxel.y), z = $(xend_voxel.z)
+	- track length L =$(xtrack_length)
+	- energy = $(energy_kev) KeV
+	- blob 1 energy = $(round(eb1, digits=1)) keV
+	- blob 2 energy = $(round(eb2, digits=1)) keV
+	- blob 1 # of voxels = $(nb1)
+	- blob 2 # of voxels = $(nb2)
+	"""
 end
 
-# ╔═╡ b59703c8-2851-494b-b22d-d626ebf9a2e3
-let
-	Xtl, Ytl, Ztl =track_positions(trk1e)
-	histo_xyz(Xtl,Ytl,Ztl,"1e")
+# ╔═╡ 00910312-2f5c-49bf-abda-11a6acf86249
+jn.Petit.plot_track_blobs(trksbb0[i], rblob;
+                         markersize_voxels=3.0,
+                         show_connections=true,
+                         alpha_connections=0.2,
+                         alpha_spheres=0.3,
+                         sphere_resolution=20)
+
+# ╔═╡ 131e6669-5a26-4d9c-9ef4-911aa779a20e
+if babb
+	let
+		blobsBB = jn.Petit.blob_analysis(trksbb0, rblob)
+		jn.Petit.write_blobs_csv(blobsBB, fnBB)
+	end
 end
+
+
+# ╔═╡ cf3042b0-d5f3-4716-ab25-6ca736b491db
+begin
+  blobsBBFid = blobsBB[(blobsBB.confidence .> confCut) .& (blobsBB.trackLength .> trklCut) .& (blobsBB.eB2 .< eblb2Max), :]
+	
+	ntrBB.nfid = size(blobsBBFid)[1]
+	effBB.efffid = ntrBB.nfid/ntrBB.ntot
+end
+
+# ╔═╡ 794ac8f8-3eee-4a35-96b0-b5dca3615a07
+begin
+	histo_b1_b2(blobsBBFid.eB1, blobsBBFid.eB2)
+end
+
+
+# ╔═╡ ac25b86e-97b3-4d54-b71a-a68a79a90995
+begin
+	trksxe1e = trksxe.tracks
+	ntrXe = jn.Petit.NTRKS(length(trksxe1e), 1, 1, 1) 
+	Xxe, Yxe, Zxe =track_positions(trksxe1e)
+	histo_xyz(Xbb,Ybb,Zbb,"Xe-137")
+end
+
+# ╔═╡ 6ec7bab6-27c1-450d-a346-9abe523f1ca7
+let
+	xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev=find_track_extremes(trksxe1e, i=i)
+	blobs = jn.Petit.energy_in_spheres_around_extremes(trksxe1e[i], xresult, rblob)
+	eb1 = blobs.blob1_energy * 1e+3
+	eb2 = blobs.blob2_energy * 1e+3
+	nb1 = blobs.blob1_voxel_count
+	nb2 = blobs.blob2_voxel_count
+	md"""
+	#### Find blobs: Example 
+	- confidence = $(xresult.confidence)
+	- start voxel: x = $(xstart_voxel.x), y = $(xstart_voxel.y), z = $(xstart_voxel.z)
+	- end voxel: x = $(xend_voxel.x), y = $(xend_voxel.y), z = $(xend_voxel.z)
+	- track length L =$(xtrack_length)
+	- energy = $(energy_kev) KeV
+	- blob 1 energy = $(round(eb1, digits=1)) keV
+	- blob 2 energy = $(round(eb2, digits=1)) keV
+	- blob 1 # of voxels = $(nb1)
+	- blob 2 # of voxels = $(nb2)
+	"""
+end
+
+# ╔═╡ 75547508-ba93-4df5-af81-6026f88499a5
+jn.Petit.plot_track_blobs(trksxe1e[i], rblob;
+                         markersize_voxels=3.0,
+                         show_connections=true,
+                         alpha_connections=0.2,
+                         alpha_spheres=0.3,
+                         sphere_resolution=20)
+
+# ╔═╡ 93f37121-c331-4e84-80ac-66c4c6e2aef6
+if baxe
+	let
+		blobsXe = jn.Petit.blob_analysis(trksxe1e, rblob)
+		jn.Petit.write_blobs_csv(blobsXe, fnXe)
+	end
+end
+
+
+# ╔═╡ d995912c-5e3d-46da-a19b-730498af7ff5
+begin
+  blobsXeFid = blobsXe[(blobsXe.confidence .> confCut) .& (blobsXe.trackLength .> trklCut) .& (blobsXe.eB2 .< eblb2Max), :]
+	
+	ntrXe.nfid = size(blobsXeFid)[1]
+	effXe.efffid = ntrXe.nfid/ntrXe.ntot
+end
+
+# ╔═╡ f35f3201-6180-418d-aa4a-b495f4a9de09
+begin
+	histo_b1_b2(blobsXeFid.eB1, blobsXeFid.eB2)
+end
+
 
 # ╔═╡ 87c72baa-ba4c-4164-ba72-e68b6a7bb2d6
 function track_energies_keV(tracks)
@@ -637,142 +1169,6 @@ function track_energies_keV(tracks)
 		push!(E, energy_kev)
 	end
 	E
-end
-
-# ╔═╡ 55b40e99-5ded-4757-ba20-28e80c144777
-begin
-	ebi = track_energies_keV(trkb214)
-	histo_trak_energy(ebi, "Bi214-Energy")
-end
-
-# ╔═╡ b6b7d4ab-0d75-49f1-bfd2-766fe60bf585
-begin
-	ebb = track_energies_keV(trkbb)
-	histo_trak_energy(ebb, "bb0nu")
-end
-
-# ╔═╡ 78d16892-dab9-4b2a-97b9-06e49592f0c6
-begin
-	etl = track_energies_keV(trktl)
-	histo_trak_energy(etl, "Tl208-Energy")
-end
-
-# ╔═╡ ec09be7e-90d7-48ee-b7d2-9125c8ca7329
-let
-	etl = track_energies_keV(trk1e)
-	histo_trak_energy(etl, "1e-Energy")
-end
-
-# ╔═╡ 98033f21-5720-4d22-94a8-a72e650a860b
-function blob_analysis(strks, r)
-	eB1=Float64[]
-	eB2=Float64[]
-	CON = Float64[]
-	E = track_energies_keV(strks)
-	TL = Float64[]
-	for strk in strks
-		xresult = jn.Petit.walk_track_from_extremes(strk)
-	  	xtrack_length = xresult.total_length
-		confidence = xresult.confidence
-		
-		blobs = jn.Petit.energy_in_spheres_around_extremes(strk, xresult, r)
-		eb1 = blobs.blob1_energy * 1e+3
-		eb2 = blobs.blob2_energy * 1e+3
-		push!(eB1, eb1)
-		push!(eB2, eb2)
-		push!(CON, confidence)
-		push!(TL, xtrack_length)
-	end
-	return CON, TL, E, eB1, eB2
-		
-	
-end
-
-# ╔═╡ 403b3c7f-d7c3-4762-8605-5d24fb087415
-begin
-	xcon, xtl, xe, xeb1, xeb2 = blob_analysis(trkb214, rblob)
-	hek, p_ek, p_c, p_tl = histo_energy_trkl_conf(xcon, xtl, xe)
-	
-	xebis = jn.Petit.smear_histogram(hek, erex)
-	ehbi, phbi = jn.Petit.step_hist(xebis;
-         nbins = 40,
-         xlim   = (2300.0, 2700.0),
-         xlabel = " E (keV)",
-         ylabel = "Frequency",
-         title=" Bi 214 E ")
-	plot(p_c, p_tl, p_ek, phbi)
-end
-
-# ╔═╡ d4bba489-68d1-4a21-994b-aebbb50fe601
-histo_b1_b2(xeb1, xeb2, xcon)
-
-# ╔═╡ 73cb4e71-d232-4c97-ba8f-27d170823073
-begin
-fgbi, pfgbi =jn.Petit.plot_fit_gauss(xebis, "Track Energy", "Counts",
-                        30, 2400.0, 2500.0;
-                        xgmin=2400.0, xgmax=2500.0, gbins=30)
-	plot(pfgbi)
-end
-
-# ╔═╡ d1c7141a-1f18-4079-ada2-463593c5e20e
-begin
-	xconb0, xtlb0, xeb0, xebb1, xebb2 = blob_analysis(trkbb, rblob)
-	hekb, p_ekb, p_cb, p_tlb = histo_energy_trkl_conf(xconb0, xtlb0, xeb0)
-	xebbs = jn.Petit.smear_histogram(hekb, erex)
-	ehbb, phbb = jn.Petit.step_hist(xebbs;
-         nbins = 40,
-         xlim   = (2300.0, 2700.0),
-         xlabel = " E (keV)",
-         ylabel = "Frequency",
-         title=" Bi 214 E ")
-	plot(p_cb, p_tlb, p_ekb, phbb)
-end
-
-# ╔═╡ f0f3e0a6-6a6a-4e95-b889-6a8995faf266
-histo_b1_b2(xebb1, xebb2,xconb0)
-
-# ╔═╡ f5900835-ec28-427b-837f-09620735976b
-begin
-fgbb, pfgbb =jn.Petit.plot_fit_gauss(xebbs, "Track Energy", "Counts",
-                        30, 2410.0, 2500.0;
-                        xgmin=2400.0, xgmax=2500.0, gbins=30)
-plot(pfgbi, pfgbb,layout=(1,2), size=(1400, 800))
-end
-
-# ╔═╡ f1f036c6-d455-499e-b7c6-2a6716cd3485
-begin
-	xtlcon, xtltl, xtle, xtleb1, xtleb2 = blob_analysis(trktl, rblob)
-	htlek, p_tlek, p_tlc, p_tltl = histo_energy_trkl_conf(xtlcon, xtltl, xtle)
-	
-	xetls = jn.Petit.smear_histogram(htlek, erex)
-	ehtl, phtl = jn.Petit.step_hist(xetls;
-         nbins = 40,
-         xlim   = (2300.0, 2700.0),
-         xlabel = " E (keV)",
-         ylabel = "Frequency",
-         title=" Tl-208 E ")
-	plot(p_tlc, p_tltl, p_tlek, phtl)
-end
-
-# ╔═╡ 6de3499c-3cf8-4985-9a2b-e69f173044a8
-length(xtlcon)
-
-# ╔═╡ f32501b3-a66c-4c3d-aff0-ac28f05abc8d
-histo_b1_b2(xtleb1, xtleb2, xtlcon)
-
-# ╔═╡ dd12ed13-1cd4-48d8-bf28-25baa2a090cd
-begin
-	x1econ, x1etl, x1e, x1eeb1, x1eeb2 = blob_analysis(trk1e, rblob)
-	h1eek, p_1eek, p_1ec, p_1etl = histo_energy_trkl_conf(x1econ, x1etl, x1e)
-	
-	xe1es = jn.Petit.smear_histogram(h1eek, erex)
-	eh1e, ph1e = jn.Petit.step_hist(xe1es;
-         nbins = 40,
-         xlim   = (2300.0, 2700.0),
-         xlabel = " E (keV)",
-         ylabel = "Frequency",
-         title=" TXe-137 E ")
-	plot(p_1ec, p_1etl, p_1eek, ph1e)
 end
 
 # ╔═╡ 8f7a358e-b98a-41cc-9d30-2c7cce24aebb
@@ -829,7 +1225,7 @@ function trk_plot(trkl; nbins=30, title="")
     p1
 end
 
-# ╔═╡ a8d1a7d5-bfaa-4430-abde-01b167249f29
+# ╔═╡ e086d2fc-e305-4b5b-a76b-f0f20808035e
 function energy_trk_length(xe, xtl)
 	p1 = etrk_plot(xe, nbins=50, title="Energy (keV)")
 	p2 = trk_plot(xtl; nbins=30, title="Track Length (mm)")
@@ -843,111 +1239,31 @@ function energy_trk_length(xe, xtl)
 end
 
 # ╔═╡ 8e1206b0-024c-4866-a76c-1f963e2cb303
-energy_trk_length(xebis, xtl)
+begin
+	energy_trk_length(eBi, blobsBiFid.trackLength)
+end
 
-# ╔═╡ 9353df52-9492-44b6-bb80-bdaec11ffb27
-energy_trk_length(xebbs, xtlb0)
+# ╔═╡ 63496eae-e07f-4259-86a7-459de5025613
+begin
+	energy_trk_length(eTl, blobsTlFid.trackLength)
+end
 
-# ╔═╡ d208210b-ffd9-4bd1-9cd3-c828bcdef732
-energy_trk_length(xetls, xtltl)
+# ╔═╡ e571208c-50dd-487d-acb5-e17d5785f92b
+begin
+	energy_trk_length(eBB, blobsBBFid.trackLength)
+end
+
+
+# ╔═╡ 64fa7f0f-5515-4990-839b-e92d5edf4f44
+begin
+	energy_trk_length(eXe, blobsXeFid.trackLength)
+end
 
 # ╔═╡ 198102c2-a488-4b26-a222-1cd2a6294528
-function eb1_eb2_plot(eblob1, eblob2; title="", eblob_cut=600.0)
 
-
-    p3 = scatter(eblob1, eblob2,
-        xlabel = "Blob 1 Energy (keV)",
-        ylabel = "Blob 2 Energy (keV)",
-        title = "Blob Energy Correlation",
-        label = nothing,
-        markersize = 4,
-        markercolor = :purple,
-        markeralpha = 0.6,
-        markerstrokewidth = 0.5,
-        markerstrokecolor = :black,
-        xlims = (0, maximum([maximum(eblob1), maximum(eblob2)]) * 1.1),
-        ylims = (0, maximum([maximum(eblob1), maximum(eblob2)]) * 1.1),
-        aspect_ratio = :equal,
-        grid = true,
-        gridstyle = :dot,
-        gridalpha = 0.3
-    )
-
-    # Add diagonal reference line
-    max_energy = maximum([maximum(eblob1), maximum(eblob2)])
-    plot!(p3, [0, max_energy], [0, max_energy],
-        line = :dash,
-        linecolor = :red,
-        linewidth = 1,
-        label = "y = x",
-        alpha = 0.5
-    )
-
-    # Add horizontal line at eblob_cut level
-    plot!(p3, [0, max_energy], [eblob_cut, eblob_cut],
-        line = :dash,
-        linecolor = :blue,
-        linewidth = 2,
-        label = "Cut: $(eblob_cut) keV",
-        alpha = 0.7
-    )
-	p3
-
-
-end
 
 # ╔═╡ 03dd8040-7c41-465b-b55c-00c7be539cb7
-function fom_blobs(eblob1, eblob2; min_cut=100.0, max_cut=1000.0,step=50.0)
 
-	function simple_binomial_error(k::Int, n::Int)
-	    if n == 0
-	        return (0.0, 0.0)
-	    end
-	
-	    p = k / n
-	
-	    # Standard error for binomial proportion
-	    # σ = sqrt(p(1-p)/n)
-	    error = sqrt(p * (1 - p) / n)
-	
-	    return (p, error)
-	end
-    # Total number of events
-    n_total = length(eblob1)
-
-
-    # Initialize results arrays
-    cuts = Float64[]
-    efficiencies = Float64[]
-    errors = Float64[]
-
-    # Iterate over cut values
-    cut_value = min_cut
-    while cut_value <= max_cut
-        # Count events passing the cut
-        n_pass = sum(eblob2 .>= cut_value)
-
-        # Calculate efficiency and error
-        
-        eff, err = simple_binomial_error(n_pass, n_total)
-        
-
-        push!(cuts, cut_value)
-        push!(efficiencies, eff)
-        push!(errors, err)
-
-        cut_value += step
-    end
-
-    # Create output dataframe
-    results_df = DataFrame(
-        eblob2 = cuts,
-        eff = round.(efficiencies, digits=4),
-        err = round.(errors, digits=4)
-    )
-
-    return results_df
-end
 
 # ╔═╡ 65857e3a-32ac-4496-98a1-9d39a9694c37
 function fom_ecut(etrkt; min_cut=2400.0, max_cut=2500.0,step=20.0)
@@ -1006,109 +1322,20 @@ function fom_ecut(etrkt; min_cut=2400.0, max_cut=2500.0,step=20.0)
     return results_df, ff
 end
 
-# ╔═╡ e7060fc7-f3e6-477b-9963-072de8730de8
-function fom_plot(results_df::DataFrame, title::String="")
-    # Create the plot with error bars
-    p = scatter(results_df.eblob2, results_df.eff,
-                yerror = results_df.err,
-                xlabel = "Blob 2 Energy Cut (keV)",
-                ylabel = "Efficiency",
-                title = isempty(title) ? "Efficiency vs Energy Cut" : title,
-                label = "Data",
-                markersize = 5,
-                markercolor = :blue,
-                markerstrokewidth = 1,
-                markerstrokecolor = :black,
-                linecolor = :blue,
-                linewidth = 1,
-                ylims = (0, maximum(results_df.eff) * 1.1),
-                grid = true,
-                gridstyle = :dot,
-                gridalpha = 0.3,
-                legend = :topright)
-
-    # Add a smooth line through the points
-    plot!(p, results_df.eblob2, results_df.eff,
-          line = :solid,
-          linewidth = 2,
-          label = nothing,
-          color = :blue,
-          alpha = 0.5)
-
-    # Add percentage labels on secondary y-axis
-    plot!(p, yticks = (0:0.1:1.0, ["$(Int(y*100))%" for y in 0:0.1:1.0]))
-
-    return p
-end
-
-
-# ╔═╡ 2de993fe-47dc-459d-8000-708d85ed425f
-function eb1_vs_eb2(xeb1, xeb2, effdf; eblob_cut=600.0)
-	p1 = eb1_eb2_plot(xeb1, xeb2, title="Bi-214", eblob_cut=eblob_cut)
-	p2 = fom_plot(effdf, "FOM: Bi-214")
-    plot(p1, p2,
-        layout = (1, 2),
-        size = (900, 500),
-        plot_title = "energy blob1 vs energy blob2",
-        plot_titlefontsize = 16,
-        margin = 5Plots.mm
-    )
-end
-
 # ╔═╡ 4657a7ef-3241-4ea9-81cd-4fb554a37c5b
 begin
-	effbBi = fom_blobs(xeb1, xeb2; min_cut=200.0, max_cut=500.0,step=25.0)
-	effeBi, ffBi = fom_ecut(xebis; min_cut=2420.0, max_cut=2500.0,step=5.0)
-	eb1_vs_eb2(xeb1, xeb2, effbBi,eblob_cut=425.0)
-end
-
-
-# ╔═╡ 21d074a4-0ce2-481b-9169-f3361eac108d
-pfombie = fom_plot(effeBi, " Efficiency Bi-214: Ecut")
-
-# ╔═╡ 3a790c47-681a-4880-adbe-7172e4f8fd13
-effeBi
-
-# ╔═╡ 2643efff-0077-4e37-a283-146194a56a75
-effeBi.eff
-
-# ╔═╡ e24e87ee-f6dc-4dac-ab76-c24d2deb4e3f
- begin
-  ng1, ng2, p_dists, eff1, eff2, steps, p_eff = gaussian_efficiency_analysis(fgbb, fgbi,xmin=2420.0, xmax=2500.0, nsteps=20, ff=ffBi)
-  p_dists  # Show distributions plot
- end
-
-# ╔═╡ 5c33c5db-0583-4c66-92bd-c3cb985d30f7
-p_eff    # Show efficiency plot
-
-# ╔═╡ 270136ac-f0d2-447b-b4a5-da44709ee79a
-begin
-	effbb = eff1[1:end-1]
-	effbi = eff2[1:end-1]
-	energies = steps[1:end-1]
+	effBlbBi = jn.Petit.fom_blobs(blobsBiFid.eB1, 
+								  blobsBiFid.eB2,
+								  min_cut=200.0,
+						          max_cut=600.0,step=25.0)
 	
-	d = Poisson.(ffBi*effbi)
-	fom  = effbb./std.(d) 
-	plot(energies, fom,
-                marker=:circle, markersize=5, lw=2,
-                label="FOM ",
-                xlabel="Step", ylabel="fom",
-                title="FOM Curve",
-                legend=:topright, ylim=(0, 1.5))
+	effEneBi, ffBi = fom_ecut(eBi; min_cut=2420.0, max_cut=2500.0,step=5.0)
+	eb1_vs_eb2(blobsBiFid.eB1, blobsBiFid.eB2, effBlbBi,eblob_cut=425.0)
 end
 
-# ╔═╡ ea7e8b85-7a18-4f9f-b1e0-60643ea44a29
-begin
-	ie = argmax(fom)
-	ecut = energies[ie]
-	cefbb = effbb[ie]
-	cefbi = effbi[ie]
-	md"""
-	- FOM maximizes at $(ecut)
-	- eff bb0nu = $(cefbb)
-	- eff bi214 = $(cefbi)
-	"""
-end
+
+# ╔═╡ 960a2984-043e-4fab-a981-fe0f8e165e02
+effBlbBi
 
 # ╔═╡ c546afb2-f5cd-4290-ae6d-2805daa2a3fa
 begin
@@ -1136,253 +1363,166 @@ begin
                 legend=:topright, ylim=(0, 1.5))
 end
 
-# ╔═╡ 988b5474-d301-4527-b553-cebe8decbec5
-begin
-	zie = argmax(zfom)
-	zecut = energies[zie]
-	zcefbb = effbb[zie]
-	zcefbi = effbi[zie]
-	md"""
-	- FOM maximizes at $(zecut)
-	- eff bb0nu = $(zcefbb)
-	- eff bi214 = $(zcefbi)
-	"""
-end
-
-# ╔═╡ 785df551-c770-421b-a2c1-91d064b47de5
-begin
-	effb0b = fom_blobs(xebb1, xebb2; min_cut=200.0, max_cut=500.0,step=25.0)
-	effe0b, ffbb = fom_ecut(xebbs; min_cut=2420.0, max_cut=2500.0,step=5.0)
-	eb1_vs_eb2(xebb1, xebb2, effb0b, eblob_cut=425.0)
-end
-
-# ╔═╡ 0d365351-e12c-43e2-87a7-6f46c391aaa2
-effe0b
-
-# ╔═╡ 73ff1c94-7317-4a56-a96c-3dd9c6cf69a8
-effe0b.eff
-
-# ╔═╡ 995dd661-1dac-4f62-b91c-18f2310c797d
+# ╔═╡ 56917df0-2e21-44c4-a7b7-3619a8661ab5
 let
-	ie = 8
-	ecut = effe0b.eblob2[ie]
-	ceffbi = effeBi.eff[ie]
-	cefbb = effe0b.eff[ie]
+	ice = argmax(zfom)
+	ecutx = zenergies[ice]
+	efbb = zeffbb[ice]
+	efbi =zeffbi[ice]
 	md"""
-	- FOM maximizes bkgnd suppresion at $(ecut)
-	- eff bb0nu = $(cefbb)
-	- eff bi214 = $(ceffbi)
+	- Gaussian FOM maximizes at $(ecutx)
+	- eff bb0nu = $(efbb)
+	- eff bi214 = $(efbi)
 	"""
 end
 
-# ╔═╡ 811eeb28-c626-414d-b6fb-41dce9de1d05
+# ╔═╡ 8c10a242-7411-4973-9fdc-a5e8ce461ee4
 begin
-	pfombbe = fom_plot(effe0b, "Efficiency: bb0nu: Ecut")
-	plot(pfombie, pfombbe)
+	effBlbTl = jn.Petit.fom_blobs(blobsTlFid.eB1, 
+										   blobsTlFid.eB2,
+										   min_cut=200.0,
+						                   max_cut=600.0,step=25.0)
+	effEneTl, ffTl = fom_ecut(eTl; min_cut=2420.0, max_cut=2500.0,step=5.0)
+	eb1_vs_eb2(blobsTlFid.eB1, blobsTlFid.eB2, effBlbTl,eblob_cut=425.0)
 end
 
-# ╔═╡ 35c2ad9f-a206-45e3-8258-5e04c645dd13
+# ╔═╡ 178e3c90-ed84-43e9-b7d8-2282c3758961
 begin
-	yeffbb = effb0b.eff
-	yeffbi = effbBi.eff
-	eblb = effb0b.eblob2
+	pFomTlEne = fom_plot(effEneTl, " Efficiency Tl-208: Ecut")
+end
+
+# ╔═╡ e7ab75e6-33b7-4429-b9a2-b8600856a6fc
+begin
+	effBlbBB = jn.Petit.fom_blobs(blobsBBFid.eB1, 
+								  blobsBBFid.eB2,
+								  min_cut=200.0,
+						          max_cut=600.0,step=25.0)
 	
-	yfom  = yeffbb./sqrt.(yeffbi) 
-	plot(eblb, yfom,
-                marker=:circle, markersize=5, lw=2,
-                label="FOM ",
-                xlabel="Step", ylabel="fom",
-                title="FOM Curve blobs",
-                legend=:topright, ylim=(0, 5.5))
+	effEneBB, ffBB = fom_ecut(eBB; min_cut=2420.0, max_cut=2500.0,step=5.0)
+	eb1_vs_eb2(blobsBBFid.eB1, blobsBBFid.eB2, effBlbBB,eblob_cut=425.0)
 end
 
-# ╔═╡ 77e38166-f9a8-4a00-b034-ddc69a52a345
+
+# ╔═╡ 04bc7077-564a-470f-8138-c0ecf85d689f
 begin
-	yie = argmax(yfom)
-	yecut = eblb[yie]
-	ycefbb = yeffbb[yie]
-	ycefbi = yeffbi[yie]
-	md"""
-	- FOM maximizes at $(yecut)
-	- eff bb0nu = $(ycefbb)
-	- eff bi214 = $(ycefbi)
-	"""
+	pFomBBEne = fom_plot(effEneBB, " Efficiency bb0nu: Ecut")
 end
 
-# ╔═╡ 73eed3c2-8dbe-45bf-85af-5cc48ed6667d
+# ╔═╡ 3a233b40-4e22-4a1b-9be5-c0990fc924bd
 begin
-	eff1tbi = nbi2141t/nbi214tot
-	effroibi = eff1tbi * zcefbi
-	effblbbi = effroibi * ycefbi
-	md"""
-	### Efficiency for Bi-214 (maximize Bi-214 suppression)
-	- 1 trk no blobs = $(eff1tbi)
-	- in ROI   = $(effroibi)
-	- blob cut = $(effblbbi)
-	"""
+	fomBiBBx = effEneBB.eff ./(sqrt.(effEneBi.eff))
+	fomBiBB = replace(fomBiBBx, NaN => 0.0)
+	plot(effEneBB.eblob2, fomBiBB,
+          line = :solid,
+          linewidth = 2,
+          label = nothing,
+          color = :blue,
+          alpha = 0.5)
 end
 
-# ╔═╡ 0d3b2f02-e66b-469e-96e9-1bb702466f87
-begin
-	eff1tbb = nbbb1t/nbbtot 
-	effroibb = eff1tbb * zcefbb
-	effblbbb = effroibb * ycefbb
-	md"""
-	### Efficiency for bb0nu (maximize Bi-214 suppression)
-	- 1 trk no blobs = $(eff1tbb)
-	- in ROI   = $(effroibb)
-	- blob cut = $(effblbbb)
-	"""
-end
-
-# ╔═╡ 60e2d0eb-07dc-43ee-9c7b-67c46765a31a
-begin
-	imx2 = 5
-	y2ecut = eblb[imx2]
-	y2cefbb = yeffbb[imx2]
-	y2cefbi = yeffbi[imx2]
-	md"""
-	- FOM alternative at $(y2ecut)
-	- eff bb0nu = $(y2cefbb)
-	- eff bi214 = $(y2cefbi)
-	"""
-end
-
-# ╔═╡ 37ca7c05-f216-4302-99dd-c41b295e100c
+# ╔═╡ dafbd900-6a41-49bc-8afe-e9e31022ab49
 let
-	eff1tbi = nbi2141t/nbi214tot
-	effroibi = eff1tbi * zcefbi
-	effblbbi = effroibi * y2cefbi
+	ice = argmax(fomBiBB)
+	ecutx = effEneBB.eblob2[ice]
+	efbb = effEneBB.eff[ice]
+	efbi =effEneBi.eff[ice]
+	eftl =effEneTl.eff[ice]
+	effBi.effroi = efbi
+	effTl.effroi = eftl
+	effBB.effroi = efbb
 	md"""
-	### Efficiency for Bi-214 (maximize bbonu efficiency)
-	- 1 trk no blobs = $(eff1tbi)
-	- in ROI   = $(effroibi)
-	- blob cut = $(effblbbi)
+	- FOM maximizes at $(ecutx)
+	- eff bb0nu = $(efbb)
+	- eff bi214 = $(efbi)
+	- eff tl208 = $(eftl)
 	"""
 end
 
-# ╔═╡ c958c249-5c8b-4e59-befe-e69b98d84cf5
+# ╔═╡ 54497681-00c7-4940-9047-23cf1d86b236
+begin
+	fomBlbBiBBx = effBlbBB.eff ./(sqrt.(effBlbBi.eff))
+	fomBlBBiBB = replace(fomBlbBiBBx, NaN => 0.0)
+	plot(effBlbBB.eblob2, fomBlBBiBB,
+          line = :solid,
+          linewidth = 2,
+          label = nothing,
+          color = :blue,
+          alpha = 0.5)
+end
+
+# ╔═╡ 50076b02-bd2c-4478-961b-9abee43d82ca
 let
-	eff1tbb = nbbb1t/nbbtot 
-	effroibb = eff1tbb * zcefbb
-	effblbbb = effroibb * y2cefbb
+	ice = argmax(fomBlBBiBB)
+	ecutx = effBlbBB.eblob2[ice]
+	efbb = effBlbBB.eff[ice]
+	efbi =effBlbBi.eff[ice]
+	eftl =effBlbTl.eff[ice]
+	effBi.effblb = efbi
+	effTl.effblb = eftl
+	effBB.effblb = efbb
 	md"""
-	### Efficiency for bb0nu (maximize bb0nu efficiency)
-	- 1 trk no blobs = $(eff1tbb)
-	- in ROI   = $(effroibb)
-	- blob cut = $(effblbbb)
+	### Blobs cut
+	- FOM maximizes at $(ecutx)
+	- eff bb0nu = $(efbb)
+	- eff bi214 = $(efbi)
+	- eff tl208 = $(eftl)
 	"""
 end
 
-# ╔═╡ fd487373-3d9c-4f79-9a30-3765e7ee242f
-eblb
-
-# ╔═╡ 6a4318cf-6897-4ff0-9d82-cde4ab6c9e40
-let
-	ie = 8
-	effetl, fftl = fom_ecut(xetls; min_cut=2420.0, max_cut=2500.0,step=5.0)
-	ecut = effe0b.eblob2[ie]
-	cefftl = effetl.eff[ie]
-	cefbb = effe0b.eff[ie]
-	md"""
-	- FOM maximizes bkgnd suppresion at $(ecut)
-	- eff bb0nu = $(cefbb)
-	- eff bi214 = $(cefftl)
-	"""
-end
-
-# ╔═╡ 8756b4ca-011b-4a6a-aff6-22488c8ac854
-function eff_ecut(effbb, effbkg, ffbkg)
-	effbb = effe0b.eff
-	effbi = effbkg.eff
-	energies = effe0b.eblob2
+# ╔═╡ 9240273d-a92e-403e-a582-a7cb4789be60
+begin
+	effBlbXe = jn.Petit.fom_blobs(blobsXeFid.eB1, 
+								  blobsXeFid.eB2,
+								  min_cut=200.0,
+						          max_cut=600.0,step=25.0)
 	
-	d = Poisson.(ffbkg*effbi)
-	fom  = effbb./std.(d) 
-
-	pfom = plot(energies, fom,
-                marker=:circle, markersize=5, lw=2,
-                label="FOM ",
-                xlabel="Step", ylabel="fom",
-                title="FOM Curve",
-                legend=:topright, ylim=(0, 1.5))
-
-	return fom, pfom
-
+	effEneXe, ffXe = fom_ecut(eXe; min_cut=2420.0, max_cut=2500.0,step=5.0)
+	eb1_vs_eb2(blobsXeFid.eB1, blobsXeFid.eB2, effBlbXe,eblob_cut=425.0)
 end
 
-# ╔═╡ 899c2928-2457-4748-9fe6-3f60c85a8889
+# ╔═╡ 48577121-4f6b-494f-8ae4-d8db338089fa
 begin
-	efom, pefom = eff_ecut(effe0b, effeBi, ffBi)
-	plot(pefom)
+	fomBlbXeBBx = effBlbBB.eff ./(sqrt.(effBlbXe.eff))
+	fomBlBXeBB = replace(fomBlbXeBBx, NaN => 0.0)
+	plot(effBlbBB.eblob2, fomBlBXeBB,
+          line = :solid,
+          linewidth = 2,
+          label = nothing,
+          color = :blue,
+          alpha = 0.5)
 end
 
-# ╔═╡ 7987b9c8-275b-4c74-baeb-1a5c5ca42fde
-begin
-	effbtl = fom_blobs(xtleb1, xtleb2; min_cut=200.0, max_cut=500.0,step=25.0)
-	eb1_vs_eb2(xtleb1, xtleb2, effbtl,eblob_cut=425.0)
-end
-
-# ╔═╡ 020c589a-ac92-4031-bf29-f482c525caf6
-begin
-	yefftl = effbtl.eff
-	
-	yfomtl  = yeffbb./sqrt.(yefftl) 
-	plot(eblb, yfomtl,
-                marker=:circle, markersize=5, lw=2,
-                label="FOM ",
-                xlabel="Step", ylabel="fom",
-                title="FOM Tl-208 blobs",
-                legend=:topright, ylim=(0, 5.5))
-end
-
-# ╔═╡ 6589dac6-db2d-4e2a-82c8-11524df319db
-yefftl
-
-# ╔═╡ 83cd563c-5743-4a89-8fea-1d512cd2939a
+# ╔═╡ 2837e158-e36c-49cd-9eaf-7ffd09f064b8
 let
-	imx2 = 10
-	y2ecut = eblb[imx2]
-	y2cefbb = yeffbb[imx2]
-	y2cefbi = yefftl[imx2]
+	ice = argmax(fomBlBXeBB)
+	ecutx = effBlbBB.eblob2[ice]
+	efbb = effBlbBB.eff[ice]
+	efbi =effBlbBi.eff[ice]
+	eftl =effBlbTl.eff[ice]
+	efxe =effBlbXe.eff[ice]
+	effBi.effblb = efbi
+	effTl.effblb = eftl
+	effBB.effblb = efbb
+	effXe.effblb = efxe
 	md"""
-	- FOM alternative at $(y2ecut)
-	- eff bb0nu = $(y2cefbb)
-	- eff bi214 = $(y2cefbi)
+	### Blobs cut
+	- FOM maximizes at $(ecutx)
+	- eff bb0nu = $(efbb)
+	- eff bi214 = $(efbi)
+	- eff tl208 = $(eftl)
+	- eff xe-137 = $(eftl)
 	"""
 end
 
-# ╔═╡ e5c0d31f-7a7f-4093-bcde-1e66fd50b5c7
-begin
-	effb1e = fom_blobs(x1eeb1, x1eeb2; min_cut=200.0, max_cut=500.0,step=25.0)
-	eb1_vs_eb2(x1eeb1, x1eeb2, effb1e,eblob_cut=425.0)
-end
-
-# ╔═╡ dfe62938-b4e9-460a-accb-9f852509f038
-begin
-	yeff1e = effb1e.eff
-	
-	yfom1e  = yeffbb./sqrt.(yeff1e) 
-	plot(eblb, yfom1e,
-                marker=:circle, markersize=5, lw=2,
-                label="FOM ",
-                xlabel="Step", ylabel="fom",
-                title="FOMXe-137 blobs",
-                legend=:topright, ylim=(0, 5.5))
-end
-
-# ╔═╡ 98207c81-9f05-476f-846e-e819398ca81a
+# ╔═╡ ffc1b36a-7df4-48f6-8fff-5095d50d6039
 let
-	imx2 = 10
-	y2ecut = eblb[imx2]
-	y2cefbb = yeffbb[imx2]
-	y2cefbi = yeff1e[imx2]
-	md"""
-	- FOM alternative at $(y2ecut)
-	- eff bb0nu = $(y2cefbb)
-	- eff bi214 = $(y2cefbi)
-	"""
+	results = [effBlbBi, effBlbTl, effBlbXe]
+	labels = ["Bi-214", "Tl-208", "1e"]
+	fom_plots(results, labels)
 end
+
+# ╔═╡ e7060fc7-f3e6-477b-9963-072de8730de8
+
 
 # ╔═╡ 85d7771b-fc92-4844-9086-0d8c3b41e210
 function signal_eff(ehrx, rlow, rup; step=10.0) 
@@ -1609,94 +1749,95 @@ end
 # ╠═349825ff-7ffe-4fa1-ba26-a772041f0323
 # ╠═7504d7aa-a780-4956-99a5-08a7f9a462b2
 # ╠═c9fc0547-0e73-4629-9909-e59c3d75169d
-# ╠═fda162d5-3552-4716-968f-d2c72a093c39
 # ╠═8290afe2-e5cb-4793-b108-a313f2677119
-# ╠═b5f850b0-19ec-4e96-96cc-4c43a91e05f3
-# ╠═5bcffb43-a8f7-448f-86c2-f3261d489bbf
-# ╠═55b40e99-5ded-4757-ba20-28e80c144777
-# ╠═24518656-35e4-48ff-9b1e-7da70c3a5994
-# ╠═84e6f57f-50a7-43fc-82a4-4ef238449fc7
 # ╠═982a3890-7318-4034-b7fd-decafc288362
-# ╠═b7e69022-a4d9-4d4b-841f-9257bffe0b07
+# ╠═b581c086-865c-4761-864d-ca8e549f8a75
+# ╠═0d6dfea6-48ea-4645-b00c-568ea4e204af
+# ╠═46e73d58-dc53-42bb-add7-088ac144ca24
+# ╠═e086d2fc-e305-4b5b-a76b-f0f20808035e
+# ╠═d2b5f0e9-4a79-4c33-afb2-7e970fb5565d
+# ╠═65ec723a-6a38-4a2c-88e5-d6e1c59375bf
+# ╠═1052ab37-288a-4c84-9bbe-3407a6a0dfaf
+# ╠═641e9a21-5999-4eaa-8904-8e03fa952b49
+# ╠═d61ec9b7-4922-45de-9b6f-e0a9f4386740
+# ╠═f4e98f28-5f3a-49f5-a053-8ed532e92a60
+# ╠═8fc7e228-fb0d-4c6c-ace9-8f6cb057a989
+# ╠═22c204c8-9e36-41e0-a0d4-0b86c689739c
+# ╠═de068020-a64c-43b4-9e78-8ade8a4f6274
+# ╠═b5f850b0-19ec-4e96-96cc-4c43a91e05f3
+# ╠═9bd589eb-0bbd-4964-b4ba-8a6f8cb7b38b
 # ╠═a60ea1b2-1c4c-4565-ac34-d2580dd016e3
 # ╠═ce0c0477-0b99-400a-a85e-f8e6cad5e094
-# ╠═03cd5a27-1ace-43b3-8a31-4e34629b082d
-# ╠═bf77b535-485a-4608-aa4b-1c15950f3f9b
 # ╠═1c202304-d6ca-4dde-a7ac-f5cb2b961b93
 # ╠═99258d62-017c-45e2-b9e5-63da00815166
+# ╠═4f254ee3-c000-4c49-9f6b-0d7ef947c67d
 # ╠═403b3c7f-d7c3-4762-8605-5d24fb087415
+# ╠═bc7634bf-2d76-4966-95c1-70d3ea97e0ff
+# ╠═067d7785-ce69-4cb6-b783-9fbeab4b9f32
+# ╠═c5374971-03ed-4bec-88b6-e636ac400348
+# ╠═898274d5-9add-4b0b-bf04-724bc6e06074
 # ╠═d4bba489-68d1-4a21-994b-aebbb50fe601
 # ╠═8e1206b0-024c-4866-a76c-1f963e2cb303
 # ╠═73cb4e71-d232-4c97-ba8f-27d170823073
 # ╠═4657a7ef-3241-4ea9-81cd-4fb554a37c5b
-# ╠═21d074a4-0ce2-481b-9169-f3361eac108d
-# ╠═3a790c47-681a-4880-adbe-7172e4f8fd13
+# ╠═960a2984-043e-4fab-a981-fe0f8e165e02
+# ╠═046ec784-bc63-4dde-920d-36fc85f1ee8e
+# ╠═48b32bbf-abbb-480e-9ba0-0df5f0777336
+# ╠═10ed8e9a-e5f4-4652-9f1d-8e59eb605c95
+# ╠═ba010d8d-f836-4517-b9e3-3f154ce88497
+# ╠═e32cb510-5628-440b-a3ed-a02c0f27005e
+# ╠═9cd7ccf0-a4e7-4445-a6b1-78ffa573eb3b
+# ╠═4bcf1a8b-7101-41e9-bb30-9874275c20a6
+# ╠═37a7d81a-ca8e-4ac5-b2ca-04b261beaddb
+# ╠═01297be8-6234-4bae-91d5-963891b755ef
+# ╠═9d7572dd-1ebe-426d-a8f9-3dd540775733
+# ╠═aa3c48c6-3c83-47c3-ac59-ce12de38c371
+# ╠═63496eae-e07f-4259-86a7-459de5025613
+# ╠═8c10a242-7411-4973-9fdc-a5e8ce461ee4
+# ╠═178e3c90-ed84-43e9-b7d8-2282c3758961
 # ╠═2e1c70e9-6ecf-4e97-8705-6342028285aa
 # ╠═a6e42cf4-1389-497f-90da-1df8297cec74
-# ╠═b6b7d4ab-0d75-49f1-bfd2-766fe60bf585
-# ╠═00c71b09-25bc-41a3-b621-929caaddd626
-# ╠═c8bf9933-3676-4b6f-b1c4-9fe73036b8f2
-# ╠═db13c2ed-535b-4beb-9c71-bdb7f9fbd2c1
-# ╠═b6353c16-9a6c-474c-84c2-dc8baf0c2dfa
-# ╠═d1c7141a-1f18-4079-ada2-463593c5e20e
-# ╠═f0f3e0a6-6a6a-4e95-b889-6a8995faf266
-# ╠═9353df52-9492-44b6-bb80-bdaec11ffb27
-# ╠═f5900835-ec28-427b-837f-09620735976b
-# ╠═785df551-c770-421b-a2c1-91d064b47de5
-# ╠═0d365351-e12c-43e2-87a7-6f46c391aaa2
-# ╠═2643efff-0077-4e37-a283-146194a56a75
-# ╠═73ff1c94-7317-4a56-a96c-3dd9c6cf69a8
-# ╠═899c2928-2457-4748-9fe6-3f60c85a8889
-# ╠═995dd661-1dac-4f62-b91c-18f2310c797d
-# ╠═811eeb28-c626-414d-b6fb-41dce9de1d05
-# ╠═e24e87ee-f6dc-4dac-ab76-c24d2deb4e3f
-# ╠═5c33c5db-0583-4c66-92bd-c3cb985d30f7
-# ╠═270136ac-f0d2-447b-b4a5-da44709ee79a
-# ╠═ea7e8b85-7a18-4f9f-b1e0-60643ea44a29
+# ╠═759c3202-b6b7-45e7-ab11-75ed778273f7
+# ╠═f398f371-5271-4af7-965b-73a7027eff0b
+# ╠═00910312-2f5c-49bf-abda-11a6acf86249
+# ╠═f7b87c23-dee5-462d-b4b9-b964947b9ca7
+# ╠═131e6669-5a26-4d9c-9ef4-911aa779a20e
+# ╠═18d8eaa0-5467-4123-bfc8-f52f377e7c72
+# ╠═ac45ca81-79bc-4631-bf37-c08bbbf6159e
+# ╠═cf3042b0-d5f3-4716-ab25-6ca736b491db
+# ╠═794ac8f8-3eee-4a35-96b0-b5dca3615a07
+# ╠═e571208c-50dd-487d-acb5-e17d5785f92b
+# ╠═6ea54a0d-8b35-47d9-ac29-43b8f1d103db
+# ╠═e7ab75e6-33b7-4429-b9a2-b8600856a6fc
+# ╠═04bc7077-564a-470f-8138-c0ecf85d689f
+# ╠═3a233b40-4e22-4a1b-9be5-c0990fc924bd
+# ╠═dafbd900-6a41-49bc-8afe-e9e31022ab49
+# ╠═54497681-00c7-4940-9047-23cf1d86b236
+# ╠═50076b02-bd2c-4478-961b-9abee43d82ca
 # ╠═c546afb2-f5cd-4290-ae6d-2805daa2a3fa
 # ╠═4c76b220-b46a-4ba2-88f0-3bb787b802c2
 # ╠═6a750201-47f6-4fcc-a551-7884c0280bc5
-# ╠═988b5474-d301-4527-b553-cebe8decbec5
-# ╠═35c2ad9f-a206-45e3-8258-5e04c645dd13
-# ╠═77e38166-f9a8-4a00-b034-ddc69a52a345
-# ╠═60e2d0eb-07dc-43ee-9c7b-67c46765a31a
+# ╠═56917df0-2e21-44c4-a7b7-3619a8661ab5
 # ╠═ffb9d0d1-bca6-4b9a-87a7-e8c6280488fa
-# ╠═d3fd5874-8de1-451c-89b1-3dc05a65cef4
-# ╠═73eed3c2-8dbe-45bf-85af-5cc48ed6667d
-# ╠═0d3b2f02-e66b-469e-96e9-1bb702466f87
-# ╠═37ca7c05-f216-4302-99dd-c41b295e100c
-# ╠═c958c249-5c8b-4e59-befe-e69b98d84cf5
-# ╠═e0a4575c-afd3-4619-8fad-e321d573d1ec
-# ╠═4853838b-7292-49ad-b3d8-f116a69da7d6
-# ╠═78d16892-dab9-4b2a-97b9-06e49592f0c6
-# ╠═887e37cd-8e50-44c3-b239-1936a9b0baef
-# ╠═25650a53-6284-4c57-a590-71283d15a3fd
-# ╠═ede62a96-39b6-4d2b-ab8a-528048c56556
-# ╠═e7e8e6a4-f101-4f55-b8bf-fb9ffd5fa023
-# ╠═f1f036c6-d455-499e-b7c6-2a6716cd3485
-# ╠═6de3499c-3cf8-4985-9a2b-e69f173044a8
-# ╠═f32501b3-a66c-4c3d-aff0-ac28f05abc8d
-# ╠═d208210b-ffd9-4bd1-9cd3-c828bcdef732
-# ╠═bd5f963d-e833-41a0-a46f-f014f47dd1ca
-# ╠═6a4318cf-6897-4ff0-9d82-cde4ab6c9e40
-# ╠═a77652cb-6ab9-4f85-b8a2-5a21607444cd
-# ╠═7987b9c8-275b-4c74-baeb-1a5c5ca42fde
-# ╠═020c589a-ac92-4031-bf29-f482c525caf6
-# ╠═6589dac6-db2d-4e2a-82c8-11524df319db
-# ╠═fd487373-3d9c-4f79-9a30-3765e7ee242f
-# ╠═83cd563c-5743-4a89-8fea-1d512cd2939a
+# ╠═4eeabfad-fb46-4d90-a586-aaf712c9eb47
 # ╠═0397d23d-6c74-484b-9c8a-3989bab21239
 # ╠═d7729d46-79ac-48c2-948a-41c91f78e2e3
-# ╠═ec09be7e-90d7-48ee-b7d2-9125c8ca7329
-# ╠═b59703c8-2851-494b-b22d-d626ebf9a2e3
-# ╠═4478f154-a096-4bdb-a758-c1e300a1de45
-# ╠═a7d23b8d-0854-4751-a216-d519e85e2d8b
-# ╠═63fcc371-d276-4e15-b812-da1974b22df3
-# ╠═dd12ed13-1cd4-48d8-bf28-25baa2a090cd
-# ╠═ad4d3db9-43f6-48ee-84ba-a5a360cb258b
-# ╠═e5c0d31f-7a7f-4093-bcde-1e66fd50b5c7
-# ╠═dfe62938-b4e9-460a-accb-9f852509f038
-# ╠═98207c81-9f05-476f-846e-e819398ca81a
+# ╠═ac25b86e-97b3-4d54-b71a-a68a79a90995
+# ╠═6ec7bab6-27c1-450d-a346-9abe523f1ca7
+# ╠═75547508-ba93-4df5-af81-6026f88499a5
+# ╠═2f87d310-8d44-4649-9dfb-440e160a24f4
+# ╠═93f37121-c331-4e84-80ac-66c4c6e2aef6
+# ╠═10a4a567-6337-418b-a70e-97647af0177b
+# ╠═f333b7c7-bebb-47da-bbfc-b350f0f34a0d
+# ╠═d995912c-5e3d-46da-a19b-730498af7ff5
+# ╠═f35f3201-6180-418d-aa4a-b495f4a9de09
+# ╠═64fa7f0f-5515-4990-839b-e92d5edf4f44
+# ╠═9240273d-a92e-403e-a582-a7cb4789be60
+# ╠═48577121-4f6b-494f-8ae4-d8db338089fa
+# ╠═2837e158-e36c-49cd-9eaf-7ffd09f064b8
+# ╠═d7648894-3e02-47ca-af42-a288190f699d
+# ╠═f15ad4b6-873a-4ce3-8321-5a38e9704df2
+# ╠═ffc1b36a-7df4-48f6-8fff-5095d50d6039
 # ╠═d0f9e26b-2a3c-42a4-a826-7c8694f5d470
 # ╠═8756b4ca-011b-4a6a-aff6-22488c8ac854
 # ╠═f0ace932-f1d1-4e2b-9a6d-88b2cea4d849
@@ -1704,6 +1845,7 @@ end
 # ╠═9bae1645-1485-411d-a6d3-61906c7c4194
 # ╠═ffce2732-1271-4e7e-b3aa-4000f0355dff
 # ╠═7dad709c-17e9-4738-b6c0-6d0c9bd70f09
+# ╠═4f78d979-f707-44f9-892d-e278937c7c7e
 # ╠═883c8a64-9cc2-4a89-95d5-4e906a903954
 # ╠═75f229f8-1a11-4b9a-9ef6-331e98177caa
 # ╠═32f432a9-68c1-4a65-9b98-8f0174bf08ae
