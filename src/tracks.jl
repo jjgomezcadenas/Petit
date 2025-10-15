@@ -117,93 +117,93 @@ function find_track_extremes(track::Tracks)
     return find_track_extremes_improved(track; method=:combined)
 end
 
-function find_track_extremes_legacy(track::Tracks)
-    """
-    Legacy version of find_track_extremes using the original distance-based algorithm.
+# function find_track_extremes_legacy(track::Tracks)
+#     """
+#     Legacy version of find_track_extremes using the original distance-based algorithm.
 
-    This function is kept for backward compatibility and comparison purposes.
-    For new code, use find_track_extremes() which uses the improved algorithm.
+#     This function is kept for backward compatibility and comparison purposes.
+#     For new code, use find_track_extremes() which uses the improved algorithm.
 
-    Parameters:
-    - track: A Tracks object
+#     Parameters:
+#     - track: A Tracks object
 
-    Returns:
-    - Tuple of (extreme1_idx, extreme2_idx, path) where:
-      - extreme1_idx: Index of first extreme vertex
-      - extreme2_idx: Index of second extreme vertex
-      - path: Vector of vertex indices showing the path between extremes
-    """
-    g = track.graph
-    n_vertices = nv(g)
+#     Returns:
+#     - Tuple of (extreme1_idx, extreme2_idx, path) where:
+#       - extreme1_idx: Index of first extreme vertex
+#       - extreme2_idx: Index of second extreme vertex
+#       - path: Vector of vertex indices showing the path between extremes
+#     """
+#     g = track.graph
+#     n_vertices = nv(g)
 
-    if n_vertices == 0
-        return (nothing, nothing, Int[])
-    elseif n_vertices == 1
-        return (1, 1, [1])
-    end
+#     if n_vertices == 0
+#         return (nothing, nothing, Int[])
+#     elseif n_vertices == 1
+#         return (1, 1, [1])
+#     end
 
-    # Find vertices with degree 1 (endpoints)
-    endpoints = Int[]
-    for v in vertices(g)
-        if degree(g, v) == 1
-            push!(endpoints, v)
-        end
-    end
+#     # Find vertices with degree 1 (endpoints)
+#     endpoints = Int[]
+#     for v in vertices(g)
+#         if degree(g, v) == 1
+#             push!(endpoints, v)
+#         end
+#     end
 
-    # Case 1: Linear track with clear endpoints
-    if length(endpoints) >= 2
-        # Find the pair of endpoints with maximum distance
-        max_dist = 0.0
-        best_pair = (endpoints[1], endpoints[2])
+#     # Case 1: Linear track with clear endpoints
+#     if length(endpoints) >= 2
+#         # Find the pair of endpoints with maximum distance
+#         max_dist = 0.0
+#         best_pair = (endpoints[1], endpoints[2])
 
-        for i in 1:length(endpoints)-1
-            for j in i+1:length(endpoints)
-                v1, v2 = endpoints[i], endpoints[j]
-                dist = euclidean_distance(
-                    track.voxels.x[v1], track.voxels.y[v1], track.voxels.z[v1],
-                    track.voxels.x[v2], track.voxels.y[v2], track.voxels.z[v2]
-                )
-                if dist > max_dist
-                    max_dist = dist
-                    best_pair = (v1, v2)
-                end
-            end
-        end
+#         for i in 1:length(endpoints)-1
+#             for j in i+1:length(endpoints)
+#                 v1, v2 = endpoints[i], endpoints[j]
+#                 dist = euclidean_distance(
+#                     track.voxels.x[v1], track.voxels.y[v1], track.voxels.z[v1],
+#                     track.voxels.x[v2], track.voxels.y[v2], track.voxels.z[v2]
+#                 )
+#                 if dist > max_dist
+#                     max_dist = dist
+#                     best_pair = (v1, v2)
+#                 end
+#             end
+#         end
 
-        # Find path between extremes using BFS
-        path = find_path_bfs(g, best_pair[1], best_pair[2])
-        return (best_pair[1], best_pair[2], path)
+#         # Find path between extremes using BFS
+#         path = find_path_bfs(g, best_pair[1], best_pair[2])
+#         return (best_pair[1], best_pair[2], path)
 
-    # Case 2: Circular track or single endpoint - find furthest points
-    else
-        # Use all vertices if no clear endpoints
-        vertices_to_check = length(endpoints) == 1 ?
-                            [endpoints[1]; setdiff(vertices(g), endpoints)] :
-                            collect(vertices(g))
+#     # Case 2: Circular track or single endpoint - find furthest points
+#     else
+#         # Use all vertices if no clear endpoints
+#         vertices_to_check = length(endpoints) == 1 ?
+#                             [endpoints[1]; setdiff(vertices(g), endpoints)] :
+#                             collect(vertices(g))
 
-        # Find pair of vertices with maximum distance
-        max_dist = 0.0
-        best_pair = (vertices_to_check[1], vertices_to_check[min(2, end)])
+#         # Find pair of vertices with maximum distance
+#         max_dist = 0.0
+#         best_pair = (vertices_to_check[1], vertices_to_check[min(2, end)])
 
-        for i in 1:length(vertices_to_check)-1
-            for j in i+1:length(vertices_to_check)
-                v1, v2 = vertices_to_check[i], vertices_to_check[j]
-                dist = euclidean_distance(
-                    track.voxels.x[v1], track.voxels.y[v1], track.voxels.z[v1],
-                    track.voxels.x[v2], track.voxels.y[v2], track.voxels.z[v2]
-                )
-                if dist > max_dist
-                    max_dist = dist
-                    best_pair = (v1, v2)
-                end
-            end
-        end
+#         for i in 1:length(vertices_to_check)-1
+#             for j in i+1:length(vertices_to_check)
+#                 v1, v2 = vertices_to_check[i], vertices_to_check[j]
+#                 dist = euclidean_distance(
+#                     track.voxels.x[v1], track.voxels.y[v1], track.voxels.z[v1],
+#                     track.voxels.x[v2], track.voxels.y[v2], track.voxels.z[v2]
+#                 )
+#                 if dist > max_dist
+#                     max_dist = dist
+#                     best_pair = (v1, v2)
+#                 end
+#             end
+#         end
 
-        # Find shortest path between extremes
-        path = find_path_bfs(g, best_pair[1], best_pair[2])
-        return (best_pair[1], best_pair[2], path)
-    end
-end
+#         # Find shortest path between extremes
+#         path = find_path_bfs(g, best_pair[1], best_pair[2])
+#         return (best_pair[1], best_pair[2], path)
+#     end
+# end
 
 function find_path_bfs(g::SimpleGraph, start_vertex::Int, end_vertex::Int)
     """
@@ -297,6 +297,39 @@ function walk_track_from_extremes(track::Tracks)
             total_length = total_length,
             confidence = confidence)
 end
+
+
+  function find_track_extremes(trk; i=1)
+	xresult = walk_track_from_extremes(trk[i])
+	xstart_voxel, xend_voxel = xresult.extremes
+  	xtrack_length = xresult.total_length
+	energy_kev = 1e+3 * sum(trk[i].voxels.energy)
+	return xresult, xstart_voxel, xend_voxel, xtrack_length, energy_kev
+end
+
+
+function track_positions(tracks::Vector{Tracks})
+	X = Float64[]
+	Y = Float64[]
+	Z = Float64[]
+	for i in 1:length(tracks)
+		append!(X, tracks[i].voxels.x)
+		append!(Y, tracks[i].voxels.y)
+		append!(Z, tracks[i].voxels.z)
+	end
+	X,Y,Z
+end
+
+
+function track_energies_keV(tracks::Tracks)
+	E = Float64[]
+	for i in 1:length(tracks)
+		energy_kev = 1e+3 * sum(tracks[i].voxels.energy)
+		push!(E, energy_kev)
+	end
+	E
+end
+
 
 function energy_in_spheres_around_extremes(track::Tracks, walk_result, radius::Float64)
     """
@@ -400,6 +433,191 @@ function energy_in_spheres_around_extremes(track::Tracks, walk_result, radius::F
             blob2_energy = blob2_energy,
             blob2_voxel_count = blob2_voxel_count,
             blob2_center = blob2_center)
+end
+
+"""
+    energy_in_variable_spheres_around_extremes(track::Tracks, walk_result;
+                                                seed_radius::Float64=3.0,
+                                                step::Float64=1.0,
+                                                max_radius::Float64=10.0,
+                                                threshold::Float64=0.05)
+
+Calculate energy in spheres around track extremes using adaptive radius expansion.
+
+Starts with a seed radius and expands until energy variation becomes small or max radius is reached.
+
+# Arguments
+- `track::Tracks`: A Tracks object
+- `walk_result`: Result from walk_track_from_extremes function
+- `seed_radius::Float64`: Initial sphere radius in mm (default: 3.0)
+- `step::Float64`: Radius increment in mm (default: 1.0)
+- `max_radius::Float64`: Maximum sphere radius in mm (default: 10.0)
+- `threshold::Float64`: Relative energy change threshold to stop expansion (default: 0.05)
+
+# Returns
+- NamedTuple with:
+  - blob1_energy: Energy in sphere with higher energy
+  - blob2_energy: Energy in sphere with lower energy
+  - blob1_radius: Final radius used for blob1
+  - blob2_radius: Final radius used for blob2
+  - blob1_voxel_count: Number of voxels in blob1
+  - blob2_voxel_count: Number of voxels in blob2
+  - blob1_center: Coordinates of blob1 center (x, y, z)
+  - blob2_center: Coordinates of blob2 center (x, y, z)
+  - blob1_history: Vector of (radius, energy) pairs showing expansion history
+  - blob2_history: Vector of (radius, energy) pairs showing expansion history
+
+# Algorithm
+For each extreme:
+1. Start with seed_radius
+2. Calculate energy within sphere
+3. Expand radius by step
+4. Calculate new energy
+5. If relative change < threshold, stop
+6. If radius >= max_radius, stop
+7. Repeat from step 3
+"""
+function energy_in_variable_spheres_around_extremes(track::Tracks, walk_result;
+                                                     seed_radius::Float64=3.0,
+                                                     step::Float64=1.0,
+                                                     max_radius::Float64=10.0,
+                                                     threshold::Float64=0.05)
+    # Check if we have valid extremes
+    if isnothing(walk_result.extremes[1])
+        return (blob1_energy = 0.0,
+                blob2_energy = 0.0,
+                blob1_radius = 0.0,
+                blob2_radius = 0.0,
+                blob1_voxel_count = 0,
+                blob2_voxel_count = 0,
+                blob1_center = (NaN, NaN, NaN),
+                blob2_center = (NaN, NaN, NaN),
+                blob1_history = Tuple{Float64,Float64}[],
+                blob2_history = Tuple{Float64,Float64}[])
+    end
+
+    start_voxel, end_voxel = walk_result.extremes
+
+    # Get coordinates of extreme voxels
+    start_center = (start_voxel.x, start_voxel.y, start_voxel.z)
+    end_center = (end_voxel.x, end_voxel.y, end_voxel.z)
+
+    # Helper function to calculate energy in sphere at given radius
+    function calculate_sphere_energy(center, radius)
+        energy = 0.0
+        count = 0
+        for i in 1:nrow(track.voxels)
+            voxel_x = track.voxels.x[i]
+            voxel_y = track.voxels.y[i]
+            voxel_z = track.voxels.z[i]
+            voxel_energy = track.voxels.energy[i]
+
+            dist = euclidean_distance(voxel_x, voxel_y, voxel_z,
+                                     center[1], center[2], center[3])
+
+            if dist <= radius
+                energy += voxel_energy
+                count += 1
+            end
+        end
+        return energy, count
+    end
+
+    # Adaptive expansion for start sphere
+    start_history = Tuple{Float64,Float64}[]
+    current_radius = seed_radius
+    prev_energy = 0.0
+    start_final_energy = 0.0
+    start_final_count = 0
+    start_final_radius = seed_radius
+
+    while current_radius <= max_radius
+        energy, count = calculate_sphere_energy(start_center, current_radius)
+        push!(start_history, (current_radius, energy))
+
+        # Check convergence
+        if energy > 0.0 && prev_energy > 0.0
+            relative_change = abs(energy - prev_energy) / energy
+            if relative_change < threshold
+                start_final_energy = energy
+                start_final_count = count
+                start_final_radius = current_radius
+                break
+            end
+        end
+
+        start_final_energy = energy
+        start_final_count = count
+        start_final_radius = current_radius
+        prev_energy = energy
+        current_radius += step
+    end
+
+    # Adaptive expansion for end sphere
+    end_history = Tuple{Float64,Float64}[]
+    current_radius = seed_radius
+    prev_energy = 0.0
+    end_final_energy = 0.0
+    end_final_count = 0
+    end_final_radius = seed_radius
+
+    while current_radius <= max_radius
+        energy, count = calculate_sphere_energy(end_center, current_radius)
+        push!(end_history, (current_radius, energy))
+
+        # Check convergence
+        if energy > 0.0 && prev_energy > 0.0
+            relative_change = abs(energy - prev_energy) / energy
+            if relative_change < threshold
+                end_final_energy = energy
+                end_final_count = count
+                end_final_radius = current_radius
+                break
+            end
+        end
+
+        end_final_energy = energy
+        end_final_count = count
+        end_final_radius = current_radius
+        prev_energy = energy
+        current_radius += step
+    end
+
+    # Determine which is blob1 (higher energy) and blob2 (lower energy)
+    if start_final_energy >= end_final_energy
+        blob1_energy = start_final_energy
+        blob1_radius = start_final_radius
+        blob1_voxel_count = start_final_count
+        blob1_center = start_center
+        blob1_history = start_history
+        blob2_energy = end_final_energy
+        blob2_radius = end_final_radius
+        blob2_voxel_count = end_final_count
+        blob2_center = end_center
+        blob2_history = end_history
+    else
+        blob1_energy = end_final_energy
+        blob1_radius = end_final_radius
+        blob1_voxel_count = end_final_count
+        blob1_center = end_center
+        blob1_history = end_history
+        blob2_energy = start_final_energy
+        blob2_radius = start_final_radius
+        blob2_voxel_count = start_final_count
+        blob2_center = start_center
+        blob2_history = start_history
+    end
+
+    return (blob1_energy = blob1_energy,
+            blob2_energy = blob2_energy,
+            blob1_radius = blob1_radius,
+            blob2_radius = blob2_radius,
+            blob1_voxel_count = blob1_voxel_count,
+            blob2_voxel_count = blob2_voxel_count,
+            blob1_center = blob1_center,
+            blob2_center = blob2_center,
+            blob1_history = blob1_history,
+            blob2_history = blob2_history)
 end
 
 function energy_in_spheres_around_extremes(track::Tracks, radius::Float64)

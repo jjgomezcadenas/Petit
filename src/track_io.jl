@@ -5,6 +5,7 @@ Functions for saving and loading Tracks objects to/from disk.
 using CSV
 using JSON
 using Serialization
+using Glob
 
 function save_track_csv(track::Tracks, filename::String)
     """
@@ -483,4 +484,68 @@ all_tracks, metadatas = chain_track_files("file1.h5", "file2.h5", "file3.h5")
 """
 function chain_track_files(file_paths::String...)
     return chain_track_files(collect(file_paths))
+end
+
+"""
+    merge_csv_files(directory::String; pattern::String="*.csv", sort_column::Union{Symbol,Nothing}=nothing)
+
+Read and merge all CSV files from a directory into a single DataFrame.
+
+# Arguments
+- `directory::String`: Path to the directory containing CSV files
+- `pattern::String`: Glob pattern for matching CSV files (default: "*.csv")
+- `sort_column::Union{Symbol,Nothing}`: Optional column name to sort the merged DataFrame by (default: nothing)
+
+# Returns
+- `DataFrame`: Merged DataFrame containing all data from matching CSV files
+
+# Example
+```julia
+# Merge all CSV files from multithreaded analysis
+df = merge_csv_files("xev1mm")
+
+# Merge with specific pattern and sort by confidence
+df = merge_csv_files("xev1mm", pattern="xev1mm_th_*.csv", sort_column=:confidence)
+```
+"""
+function merge_csv_files(directory::String; pattern::String="*.csv", sort_column::Union{Symbol,Nothing}=nothing)
+    if !isdir(directory)
+        error("Directory does not exist: $directory")
+    end
+
+    # Find all matching CSV files in the directory
+    csv_files = Glob.glob(pattern, directory)
+
+    if isempty(csv_files)
+        error("No CSV files found matching pattern '$pattern' in directory: $directory")
+    end
+
+    println("Found $(length(csv_files)) CSV files to merge")
+
+    # Read and merge all CSV files
+    dfs = DataFrame[]
+
+    for (idx, csv_file) in enumerate(csv_files)
+        # Glob.glob returns full paths when given a directory, so use directly
+        println("  [$idx/$(length(csv_files))] Reading: $(basename(csv_file))")
+        df = CSV.read(csv_file, DataFrame)
+        push!(dfs, df)
+    end
+
+    # Concatenate all DataFrames
+    merged_df = vcat(dfs...)
+
+    println("Merged $(length(csv_files)) files into DataFrame with $(nrow(merged_df)) rows")
+
+    # Sort if requested
+    if !isnothing(sort_column)
+        if sort_column in names(merged_df)
+            sort!(merged_df, sort_column)
+            println("Sorted by column: $sort_column")
+        else
+            @warn "Sort column '$sort_column' not found in DataFrame. Available columns: $(names(merged_df))"
+        end
+    end
+
+    return merged_df
 end

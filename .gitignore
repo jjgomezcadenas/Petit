@@ -28,6 +28,11 @@ backup.jl
 .vscode/
 .idea/
 
+*.json
+*.csv
+*.pdf
+*.png
+
 # Local environment files
 LocalPreferences.toml
 AnalysisResults/
