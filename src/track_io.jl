@@ -321,6 +321,17 @@ function save_tracks_to_hdf5(tracks::Vector{Tracks}, hdf5_file, batch_id::Int)
             g["components"] = comp_matrix
             g["component_lengths"] = length.(track.components)
         end
+
+        # Save diffusion parameters
+        dp = track.diffusion
+        g["diffusion_ldrift"] = dp.ldrift
+        g["diffusion_sigma_t"] = dp.sigma_t
+        g["diffusion_sigma_l"] = dp.sigma_l
+        g["diffusion_voxel_size"] = dp.voxel_size
+        g["diffusion_max_distance"] = dp.max_distance
+        g["diffusion_energy_threshold"] = dp.energy_threshold
+        g["diffusion_nbins_df"] = dp.nbins_df
+        g["diffusion_nsigma_df"] = dp.nsigma_df
     end
     elapsed_time = time() - start_time
     println("\r    Saved $n_tracks tracks to HDF5 in $(round(elapsed_time, digits=2))s        ")
@@ -394,8 +405,24 @@ function read_tracks_from_hdf5(output_file::String)
                     components[i] = Vector{Int}(comp_matrix[i, 1:comp_lengths[i]])
                 end
 
+                # Reconstruct diffusion parameters (with backwards compatibility)
+                diffusion = if haskey(track_group, "diffusion_ldrift")
+                    DiffusionParams(
+                        read(track_group["diffusion_ldrift"]),
+                        read(track_group["diffusion_sigma_t"]),
+                        read(track_group["diffusion_sigma_l"]),
+                        read(track_group["diffusion_voxel_size"]),
+                        read(track_group["diffusion_max_distance"]),
+                        read(track_group["diffusion_energy_threshold"]),
+                        read(track_group["diffusion_nbins_df"]),
+                        read(track_group["diffusion_nsigma_df"])
+                    )
+                else
+                    DiffusionParams()  # Default for old files
+                end
+
                 # Create track object
-                track = Tracks(voxels, g, components)
+                track = Tracks(voxels, g, components, diffusion)
                 push!(tracks, track)
             end
             println(" done")
@@ -548,4 +575,245 @@ function merge_csv_files(directory::String; pattern::String="*.csv", sort_column
     end
 
     return merged_df
+end
+
+
+# =============================================================================
+# RECONSTRUCTION RESULTS I/O (tracks + central paths)
+# =============================================================================
+
+"""
+    read_central_path_from_hdf5(group)
+
+Read a central path DataFrame from an HDF5 group.
+"""
+function read_central_path_from_hdf5(group)
+    cp_data = read(group["central_path_data"])
+    cp_columns = read(group["central_path_columns"])
+
+    if isempty(cp_data) || isempty(cp_columns)
+        return DataFrame()
+    end
+
+    df = DataFrame(cp_data, Symbol.(cp_columns))
+    return df
+end
+
+"""
+    read_reco_result_from_hdf5(group)
+
+Read a single reconstruction result from an HDF5 group.
+
+Returns NamedTuple with:
+- `track`: Tracks object
+- `path`: DataFrame with raw path (x, y, z, s)
+- `event_id`: Event ID
+- `track_length`: Total track length in mm
+- `confidence`: Confidence score
+- `mc_path`: DataFrame with MC path (x, y, z, energy, s)
+- `reco_s`: Vector of arc-lengths for each reco voxel
+- `kde_s`: Vector of KDE evaluation points
+- `reco_kde_f`: Vector of RECO energy density
+- `mc_kde_f`: Vector of MC energy density
+- `kde_bandwidth`: RECO KDE bandwidth used
+- `mc_kde_bandwidth`: MC KDE bandwidth used
+"""
+function read_reco_result_from_hdf5(group; diffusion::DiffusionParams=DiffusionParams())
+    # Read event metadata
+    event_id = read(group["event_id"])
+    track_length = read(group["track_length"])
+    confidence = read(group["confidence"])
+
+    # Read KDE bandwidths (with backward compatibility)
+    kde_bandwidth = haskey(group, "kde_bandwidth") ? read(group["kde_bandwidth"]) : 5.0
+    mc_kde_bandwidth = haskey(group, "mc_kde_bandwidth") ? read(group["mc_kde_bandwidth"]) : kde_bandwidth
+
+    # Read voxels
+    voxels_data = read(group["voxels"])
+    voxel_columns = read(group["voxel_columns"])
+    voxels_df = DataFrame(voxels_data, Symbol.(voxel_columns))
+
+    # Read graph
+    n_vertices = read(group["n_vertices"])
+    edge_matrix = read(group["graph_edges"])
+
+    graph = SimpleGraph(n_vertices)
+    if size(edge_matrix, 1) > 0
+        for i in 1:size(edge_matrix, 1)
+            add_edge!(graph, edge_matrix[i, 1], edge_matrix[i, 2])
+        end
+    end
+
+    # Read components
+    comp_matrix = read(group["components"])
+    components = Vector{Int}[]
+    if size(comp_matrix, 1) > 0
+        for i in 1:size(comp_matrix, 1)
+            comp = filter(x -> x > 0, comp_matrix[i, :])
+            push!(components, comp)
+        end
+    end
+
+    # Create track with diffusion params
+    track = Tracks(voxels_df, graph, components, diffusion)
+
+    # Read path (new format: path_data, or old format: central_path_data)
+    path = DataFrame()
+    if haskey(group, "path_data")
+        path_data = read(group["path_data"])
+        path_columns = read(group["path_columns"])
+        if !isempty(path_data) && !isempty(path_columns)
+            path = DataFrame(path_data, Symbol.(path_columns))
+        end
+    elseif haskey(group, "central_path_data")
+        # Backward compatibility with old files
+        path = read_central_path_from_hdf5(group)
+    end
+
+    # Read MC path (new format)
+    mc_path = DataFrame()
+    if haskey(group, "mc_path_data")
+        mc_path_data = read(group["mc_path_data"])
+        mc_path_columns = read(group["mc_path_columns"])
+        if !isempty(mc_path_data) && !isempty(mc_path_columns)
+            mc_path = DataFrame(mc_path_data, Symbol.(mc_path_columns))
+        end
+    end
+
+    # Read projected voxel arc-lengths
+    reco_s = haskey(group, "reco_s") ? read(group["reco_s"]) : Float64[]
+
+    # Read KDE results
+    kde_s = haskey(group, "kde_s") ? read(group["kde_s"]) : Float64[]
+    reco_kde_f = haskey(group, "reco_kde_f") ? read(group["reco_kde_f"]) : Float64[]
+    mc_kde_s = haskey(group, "mc_kde_s") ? read(group["mc_kde_s"]) : kde_s  # backward compat: use kde_s
+    mc_kde_f = haskey(group, "mc_kde_f") ? read(group["mc_kde_f"]) : Float64[]
+
+    # Read extreme distances (with backward compatibility)
+    d1 = haskey(group, "d1") ? read(group["d1"]) : NaN
+    d2 = haskey(group, "d2") ? read(group["d2"]) : NaN
+
+    return (track=track, path=path,
+            event_id=event_id, track_length=track_length, confidence=confidence,
+            mc_path=mc_path, reco_s=reco_s,
+            kde_s=kde_s, reco_kde_f=reco_kde_f,
+            mc_kde_s=mc_kde_s, mc_kde_f=mc_kde_f,
+            kde_bandwidth=kde_bandwidth, mc_kde_bandwidth=mc_kde_bandwidth,
+            d1=d1, d2=d2)
+end
+
+"""
+    read_reco_results_from_hdf5(filepath)
+
+Read all reconstruction results from an HDF5 file produced by track_reco_mt.jl.
+
+# Returns
+- `results`: Vector of NamedTuples with fields:
+  - `track`: Tracks object
+  - `path`: DataFrame (raw path with x, y, z, s)
+  - `event_id`, `track_length`, `confidence`
+  - `mc_path`: DataFrame (MC path with x, y, z, energy, s, primary_electron)
+  - `reco_s`: arc-lengths of reco voxels
+  - `kde_s`, `reco_kde_f`: RECO KDE evaluation grid and energy density
+  - `mc_kde_s`, `mc_kde_f`: MC KDE evaluation grid and energy density (separate from RECO)
+  - `kde_bandwidth`, `mc_kde_bandwidth`: bandwidths used
+  - `d1`, `d2`: distances from reco extremes to matched MC extremes
+- `metadata`: Dict with file metadata (sigma_t, sigma_l, voxel_size, kde_bandwidth, etc.)
+
+# Example
+```julia
+results, metadata = read_reco_results_from_hdf5("test_reco_th_1.h5")
+for r in results
+    println("Event \$(r.event_id): track_length=\$(r.track_length) mm")
+    # Access pre-computed KDE
+    plot(r.kde_s, r.reco_kde_f, label="RECO")
+    plot!(r.kde_s, r.mc_kde_f, label="MC")
+end
+```
+"""
+function read_reco_results_from_hdf5(filepath::String)
+    results = []
+    metadata = Dict{String, Any}()
+
+    h5open(filepath, "r") do fid
+        # Read metadata from attributes
+        for key in keys(attrs(fid))
+            metadata[key] = HDF5.read_attribute(fid, key)
+        end
+
+        # Reconstruct DiffusionParams from metadata
+        dfpars = DiffusionParams(
+            get(metadata, "ldrift_cm", 100.0),
+            get(metadata, "sigma_t_mm", 3.0),
+            get(metadata, "sigma_l_mm", 0.0),
+            get(metadata, "voxel_size_mm", 3.0),
+            get(metadata, "max_distance_mm", 4.5),
+            get(metadata, "energy_threshold_kev", 0.25),
+            get(metadata, "nbins", 100),
+            get(metadata, "nsigma", 3.0)
+        )
+
+        # Find all track groups
+        if !haskey(fid, "batch_1")
+            return results, metadata
+        end
+
+        batch_group = fid["batch_1"]
+        track_names = sort(keys(batch_group), by=x -> parse(Int, split(x, "_")[2]))
+
+        for track_name in track_names
+            track_group = batch_group[track_name]
+            result = read_reco_result_from_hdf5(track_group; diffusion=dfpars)
+            push!(results, result)
+        end
+    end
+
+    return results, metadata
+end
+
+"""
+    chain_reco_results(filepaths::Vector{String})
+
+Read and chain multiple reconstruction HDF5 files.
+
+# Returns
+- `all_results`: Vector of all reconstruction results
+- `all_metadata`: Vector of metadata dicts from each file
+
+# Example
+```julia
+files = ["test_reco_th_1.h5", "test_reco_th_2.h5"]
+results, metadata = chain_reco_results(files)
+```
+"""
+function chain_reco_results(filepaths::Vector{String})
+    all_results = []
+    all_metadata = Dict{String, Any}[]
+
+    for filepath in filepaths
+        results, metadata = read_reco_results_from_hdf5(filepath)
+        append!(all_results, results)
+        push!(all_metadata, metadata)
+    end
+
+    return all_results, all_metadata
+end
+
+"""
+    chain_reco_results(directory::String, pattern::String)
+
+Read and chain reconstruction files matching a glob pattern.
+
+# Example
+```julia
+results, metadata = chain_reco_results("/path/to/data", "test_reco_th_*.h5")
+```
+"""
+function chain_reco_results(directory::String, pattern::String)
+    filepaths = sort(Glob.glob(pattern, directory))
+    if isempty(filepaths)
+        @warn "No files found matching pattern '$pattern' in '$directory'"
+        return [], Dict{String, Any}[]
+    end
+    return chain_reco_results(filepaths)
 end

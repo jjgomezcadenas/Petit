@@ -50,19 +50,21 @@ function select_events(hitsdf::DataFrame, nevent::Int;
     vdf = voxelize_hits(temp_df, voxel_size_mm)
     
     # Build tracks from voxelized data
-    tracks = build_tracks(vdf, nevent; 
+    tracks = make_tracks(vdf, nevent; 
                          max_distance=max_distance_mm, 
                          energy_threshold=energy_threshold)
     
-    # Sort tracks by total energy deposition (sum of all voxel energies) in descending order
-    if length(tracks) > 0
-        track_energies = [sum(track.voxels.energy) for track in tracks]
-        sorted_indices = sortperm(track_energies, rev=true)
-        tracks = tracks[sorted_indices]
-    end
+    # # Sort tracks by total energy deposition (sum of all voxel energies) in descending order
+    # if length(tracks) > 0
+    #     track_energies = [sum(track.voxels.energy) for track in tracks]
+    #     sorted_indices = sortperm(track_energies, rev=true)
+    #     tracks = tracks[sorted_indices]
+    # end
     
     return tracks
 end
+
+
 
 number_of_events(partdf) = length(Set(partdf.event_id))
 
@@ -129,8 +131,6 @@ function find_events_with_alphas(partdf::DataFrame)
     
     return DataFrame(event_id=ids, x=xs, y=ys, z=zs, energy=energies, finalv=fvs)
 end
-
-
 
 
 function filter_fiducial_events(hitsdf::DataFrame, xyc::Float64, zc::Float64)

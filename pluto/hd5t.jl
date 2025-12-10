@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.13
+# v0.20.19
 
 using Markdown
 using InteractiveUtils
@@ -330,7 +330,7 @@ md"energy threshold (keV) $(@bind energy_threshold_kev NumberField(0.0:1000.0, d
 # ╔═╡ ceb6c086-fa7a-4265-92db-353b6380f184
 begin
 	trks = jn.Petit.make_tracks(vdf, nevent;
-						max_dist=max_distance_mm,
+						max_dist=energy_threshold_kev,
 						energy_thr=energy_threshold_kev)
 
 	md"""

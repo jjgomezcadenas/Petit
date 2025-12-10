@@ -3,7 +3,7 @@
 """
 Multi-threaded Batch Single Track Blob Analysis Script
 
-This script performs blob analysis on Xe-137 single-track events using multiple threads.
+This script performs blob analysis on single-track events using multiple threads.
 Supports both fixed and variable radius blob analysis.
 
 Usage:
@@ -14,7 +14,7 @@ Required Arguments:
     --outdir      : Output directory name (will be created)
 
 Optional Arguments (General):
-    --xedir       : Xe directory name (default: "xe137r2")
+    --xedir       : "xenon" directory name (where the single tracks ) (default: "xe137r2")
     --tag         : File pattern tag, will be expanded to *tag* (default: "st3mm")
     --nmax        : Maximum number of tracks to process, -1 for all (default: -1)
     --nprint      : Progress print interval per thread (default: 100)

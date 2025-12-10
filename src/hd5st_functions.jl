@@ -339,6 +339,198 @@ function trk_plot(trkl; nbins=30, title="")
 end
 
 
+"""
+    read_cnn_efficiencies(csvdir::String)
+
+Read CNN efficiency CSV files and return interpolation functions for signal and background.
+
+# Arguments
+- `csvdir::String`: Directory containing the CNN efficiency CSV files
+
+# Returns
+NamedTuple with:
+- `interp_1mm`: NamedTuple with (signal, background) interpolation functions for 1mm
+- `interp_3p5mm`: NamedTuple with (signal, background) interpolation functions for 3.5mm
+- `interp_10mm`: NamedTuple with (signal, background) interpolation functions for 10mm
+- `data_1mm`, `data_3p5mm`, `data_10mm`: Raw DataFrames
+
+Each interpolation function takes a threshold value and returns the efficiency.
+"""
+function read_cnn_efficiencies(csvdir::String)
+    # File names
+    file_1mm = joinpath(csvdir, "efficiency_data_MC_truth_1mm_15bar_214Bi.csv")
+    file_3p5mm = joinpath(csvdir, "efficiency_data_MC_truth_3.5mm_15bar_214Bi.csv")
+    file_10mm = joinpath(csvdir, "efficiency_data_MC_truth_10mm_15bar_214Bi.csv")
+
+    # Read CSV files
+    df_1mm = CSV.read(file_1mm, DataFrame)
+    df_3p5mm = CSV.read(file_3p5mm, DataFrame)
+    df_10mm = CSV.read(file_10mm, DataFrame)
+
+    # Create interpolation functions
+    # Sort by threshold (ascending) for proper interpolation
+    function make_interpolators(df)
+        sorted_df = sort(df, :threshold)
+        thresh = Float64.(sorted_df.threshold)
+        sig_eff = Float64.(sorted_df.signal_efficiency)
+        bkg_eff = Float64.(sorted_df.background_efficiency)
+
+        # Linear interpolation
+        sig_interp = linear_interpolation(thresh, sig_eff, extrapolation_bc=Flat())
+        bkg_interp = linear_interpolation(thresh, bkg_eff, extrapolation_bc=Flat())
+
+        return (signal=sig_interp, background=bkg_interp)
+    end
+
+    interp_1mm = make_interpolators(df_1mm)
+    interp_3p5mm = make_interpolators(df_3p5mm)
+    interp_10mm = make_interpolators(df_10mm)
+
+    return (
+        interp_1mm = interp_1mm,
+        interp_3p5mm = interp_3p5mm,
+        interp_10mm = interp_10mm,
+        data_1mm = df_1mm,
+        data_3p5mm = df_3p5mm,
+        data_10mm = df_10mm
+    )
+end
+
+
+"""
+    compute_roc(interp; thresholds=range(0.0, 1.0, length=100))
+
+Compute ROC curve from signal and background interpolation functions.
+
+# Arguments
+- `interp`: NamedTuple with (signal, background) interpolation functions
+- `thresholds`: Range of threshold values to evaluate (default: 0 to 1)
+
+# Returns
+NamedTuple with:
+- `tpr`: True positive rate (signal efficiency)
+- `fpr`: False positive rate (background efficiency)
+- `thresholds`: The threshold values used
+- `auc`: Area under the ROC curve
+"""
+function compute_roc(interp; thresholds=range(0.0, 1.0, length=100))
+    thresh = collect(thresholds)
+    tpr = [interp.signal(t) for t in thresh]      # True positive rate
+    fpr = [interp.background(t) for t in thresh]  # False positive rate
+
+    # Compute AUC using trapezoidal rule
+    # Sort by FPR for proper integration
+    sorted_idx = sortperm(fpr)
+    fpr_sorted = fpr[sorted_idx]
+    tpr_sorted = tpr[sorted_idx]
+
+    auc = 0.0
+    for i in 2:length(fpr_sorted)
+        auc += (fpr_sorted[i] - fpr_sorted[i-1]) * (tpr_sorted[i] + tpr_sorted[i-1]) / 2
+    end
+
+    return (tpr=tpr, fpr=fpr, thresholds=thresh, auc=auc)
+end
+
+
+"""
+    compute_all_rocs(cnn; thresholds=range(0.0, 1.0, length=100))
+
+Compute ROC curves for all three detector resolutions.
+
+# Arguments
+- `cnn`: Result from read_cnn_efficiencies
+- `thresholds`: Range of threshold values
+
+# Returns
+NamedTuple with roc_1mm, roc_3p5mm, roc_10mm (each containing tpr, fpr, thresholds, auc)
+"""
+function compute_all_rocs(cnn; thresholds=range(0.0, 1.0, length=100))
+    roc_1mm = compute_roc(cnn.interp_1mm; thresholds=thresholds)
+    roc_3p5mm = compute_roc(cnn.interp_3p5mm; thresholds=thresholds)
+    roc_10mm = compute_roc(cnn.interp_10mm; thresholds=thresholds)
+
+    return (roc_1mm=roc_1mm, roc_3p5mm=roc_3p5mm, roc_10mm=roc_10mm)
+end
+
+
+"""
+    plot_roc(rocs; labels=["1mm", "3.5mm", "10mm"])
+
+Plot ROC curves for multiple detector resolutions.
+
+# Arguments
+- `rocs`: Result from compute_all_rocs
+- `labels`: Labels for each curve
+
+# Returns
+- Plot object
+"""
+function plot_roc(rocs; labels=["1mm (σ)", "3.5mm (σ)", "10mm (σ)"])
+    p = plot(xlabel="True Positive Rate (Signal Eff.)",
+             ylabel="Background Rejection (1 - Bkg Eff.)",
+             title="ROC Curves",
+             legend=:bottomleft,
+             xlims=(0, 1), ylims=(0, 1),
+             aspect_ratio=:equal,
+             grid=true, gridstyle=:dot, gridalpha=0.3)
+
+    # Plot diagonal (random classifier)
+    plot!(p, [0, 1], [1, 0], linestyle=:dash, color=:gray,
+          label="Random", alpha=0.5)
+
+    # Plot each ROC curve (TPR on X, 1-FPR on Y)
+    colors = [:blue, :green, :red]
+    for (i, (roc, label, color)) in enumerate(zip(
+            [rocs.roc_1mm, rocs.roc_3p5mm, rocs.roc_10mm], labels, colors))
+        plot!(p, roc.tpr, 1.0 .- roc.fpr,
+              label="$label (AUC=$(round(roc.auc, digits=3)))",
+              linewidth=2, color=color)
+    end
+
+    return p
+end
+
+
+"""
+    plot_efficiency_vs_threshold(cnn; thresholds=range(0.0, 1.0, length=100))
+
+Plot signal and background efficiency vs threshold for all detector resolutions.
+
+# Returns
+- (plot_signal, plot_background): Tuple of two plots
+"""
+function plot_efficiency_vs_threshold(cnn; thresholds=range(0.0, 1.0, length=100))
+    thresh = collect(thresholds)
+
+    # Signal efficiency plot
+    p_sig = plot(xlabel="Threshold", ylabel="Signal Efficiency",
+                 title="Signal Efficiency vs Threshold",
+                 legend=:topright, grid=true, ylims=(0, 1))
+
+    plot!(p_sig, thresh, cnn.interp_1mm.signal.(thresh),
+          label="1mm", linewidth=2, color=:blue)
+    plot!(p_sig, thresh, cnn.interp_3p5mm.signal.(thresh),
+          label="3.5mm", linewidth=2, color=:green)
+    plot!(p_sig, thresh, cnn.interp_10mm.signal.(thresh),
+          label="10mm", linewidth=2, color=:red)
+
+    # Background efficiency plot
+    p_bkg = plot(xlabel="Threshold", ylabel="Background Efficiency",
+                 title="Background Efficiency vs Threshold",
+                 legend=:topright, grid=true, ylims=(0, 1))
+
+    plot!(p_bkg, thresh, cnn.interp_1mm.background.(thresh),
+          label="1mm", linewidth=2, color=:blue)
+    plot!(p_bkg, thresh, cnn.interp_3p5mm.background.(thresh),
+          label="3.5mm", linewidth=2, color=:green)
+    plot!(p_bkg, thresh, cnn.interp_10mm.background.(thresh),
+          label="10mm", linewidth=2, color=:red)
+
+    return (p_sig, p_bkg)
+end
+
+
 function fom_ecut(etrkt; min_cut=2400.0, max_cut=2500.0,step=20.0)
 
 	function simple_binomial_error(k::Int, n::Int)

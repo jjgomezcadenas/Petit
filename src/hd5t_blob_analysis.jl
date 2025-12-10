@@ -84,6 +84,200 @@ function get_xe137_tracks(cmdir; xedir="xe137r2", tag="st3mm")
 end
 
 
+"""
+    get_itaca_tracks(cmdir; tag::String="*")
+
+Read ITACA MC, ion and electron tracks from HDF5 files.
+
+# Arguments
+- `cmdir::String`: Directory containing the track files
+- `tag::String`: Glob pattern to match files (default: "*")
+
+# Returns
+- `(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)`: Tuple of TRK structs for MC, ion and electron tracks
+"""
+function get_itaca_tracks(cmdir::String; tag::String="*")
+    # Find mc, ion and electron files
+    mc_pattern = "*$(tag)*_mc.h5"
+    ion_pattern = "*$(tag)*_ion.h5"
+    ele_pattern = "*$(tag)*_ele.h5"
+
+    mc_files = Glob.glob(mc_pattern, cmdir)
+    ion_files = Glob.glob(ion_pattern, cmdir)
+    ele_files = Glob.glob(ele_pattern, cmdir)
+
+    if isempty(mc_files)
+        @warn "No MC track files found matching pattern: $mc_pattern in $cmdir"
+    end
+    if isempty(ion_files)
+        @warn "No ion track files found matching pattern: $ion_pattern in $cmdir"
+    end
+    if isempty(ele_files)
+        @warn "No electron track files found matching pattern: $ele_pattern in $cmdir"
+    end
+
+    # Chain MC tracks
+    mc_tracks, mc_metas = if !isempty(mc_files)
+        chain_track_files(mc_files)
+    else
+        (Tracks[], Dict{String, Any}[])
+    end
+
+    # Chain ion tracks
+    ion_tracks, ion_metas = if !isempty(ion_files)
+        chain_track_files(ion_files)
+    else
+        (Tracks[], Dict{String, Any}[])
+    end
+
+    # Chain electron tracks
+    ele_tracks, ele_metas = if !isempty(ele_files)
+        chain_track_files(ele_files)
+    else
+        (Tracks[], Dict{String, Any}[])
+    end
+
+    # Count total events processed
+    mc_ntot = sum(m["events_processed"] for m in mc_metas; init=0)
+    ion_ntot = sum(m["events_processed"] for m in ion_metas; init=0)
+    ele_ntot = sum(m["events_processed"] for m in ele_metas; init=0)
+
+    mc_trk = TRK(mc_tracks, mc_metas, mc_ntot, length(mc_tracks))
+    ion_trk = TRK(ion_tracks, ion_metas, ion_ntot, length(ion_tracks))
+    ele_trk = TRK(ele_tracks, ele_metas, ele_ntot, length(ele_tracks))
+
+    return (mc_trk, ion_trk, ele_trk)
+end
+
+
+"""
+    read_itaca_metadata(filepath::String)
+
+Read ITACA run metadata from CSV file into a DataFrame.
+
+# Arguments
+- `filepath::String`: Path to the metadata CSV file
+
+# Returns
+- `DataFrame`: DataFrame with parameter and value columns
+"""
+function read_itaca_metadata(filepath::String)
+    CSV.read(filepath, DataFrame)
+end
+
+
+"""
+    get_itaca_metadata_value(df::DataFrame, param::String)
+
+Get a specific parameter value from metadata DataFrame.
+
+# Arguments
+- `df::DataFrame`: Metadata DataFrame from read_itaca_metadata
+- `param::String`: Parameter name to retrieve
+
+# Returns
+- Value as appropriate type (String, Int, or Float64)
+"""
+function get_itaca_metadata_value(df::DataFrame, param::String)
+    row = filter(r -> r.parameter == param, df)
+    if nrow(row) == 0
+        error("Parameter '$param' not found in metadata")
+    end
+    val = row.value[1]
+
+    # Try to convert to appropriate type
+    if param in ["first_event", "last_event", "nthreads", "nbins_df"]
+        return parse(Int, val)
+    elseif param in ["directory", "input_file", "output_base"]
+        return val
+    else
+        return parse(Float64, val)
+    end
+end
+
+
+"""
+    match_itaca_events(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)
+
+Match event IDs across MC, ion, and electron tracks.
+
+For each unique event ID found in any of the three track collections,
+returns the indices (mc_idx, ion_idx, ele_idx) where that event appears.
+If an event is not present in a collection, -1 is returned for that index.
+
+# Arguments
+- `mc_trk::TRK`: MC tracks
+- `ion_trk::TRK`: Ion tracks
+- `ele_trk::TRK`: Electron tracks
+
+# Returns
+- `Dict{Int, Tuple{Int, Int, Int}}`: Dictionary mapping event_id to (mc_idx, ion_idx, ele_idx)
+"""
+function match_itaca_events(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)
+    # Build index maps: event_id -> track index
+    mc_map = Dict{Int, Int}()
+    for (idx, track) in enumerate(mc_trk.tracks)
+        if nrow(track.voxels) > 0
+            event_id = track.voxels.event_id[1]
+            mc_map[event_id] = idx
+        end
+    end
+
+    ion_map = Dict{Int, Int}()
+    for (idx, track) in enumerate(ion_trk.tracks)
+        if nrow(track.voxels) > 0
+            event_id = track.voxels.event_id[1]
+            ion_map[event_id] = idx
+        end
+    end
+
+    ele_map = Dict{Int, Int}()
+    for (idx, track) in enumerate(ele_trk.tracks)
+        if nrow(track.voxels) > 0
+            event_id = track.voxels.event_id[1]
+            ele_map[event_id] = idx
+        end
+    end
+
+    # Collect all unique event IDs
+    all_event_ids = union(keys(mc_map), keys(ion_map), keys(ele_map))
+
+    # Build result dictionary
+    result = Dict{Int, Tuple{Int, Int, Int}}()
+    for event_id in all_event_ids
+        mc_idx = get(mc_map, event_id, -1)
+        ion_idx = get(ion_map, event_id, -1)
+        ele_idx = get(ele_map, event_id, -1)
+        result[event_id] = (mc_idx, ion_idx, ele_idx)
+    end
+
+    return result
+end
+
+
+"""
+    match_itaca_events_df(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)
+
+Match event IDs across MC, ion, and electron tracks, returning a DataFrame.
+
+# Returns
+- `DataFrame`: With columns event_id, mc_idx, ion_idx, ele_idx, sorted by event_id
+"""
+function match_itaca_events_df(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)
+    matches = match_itaca_events(mc_trk, ion_trk, ele_trk)
+
+    df = DataFrame(
+        event_id = collect(keys(matches)),
+        mc_idx = [m[1] for m in values(matches)],
+        ion_idx = [m[2] for m in values(matches)],
+        ele_idx = [m[3] for m in values(matches)]
+    )
+
+    sort!(df, :event_id)
+    return df
+end
+
+
 function track_energies_keV(tracks::Vector{Tracks})
 	E = Float64[]
 	for i in 1:length(tracks)

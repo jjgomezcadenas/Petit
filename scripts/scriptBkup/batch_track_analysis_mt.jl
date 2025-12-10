@@ -90,8 +90,8 @@ function main()
     energy_threshold_kev = 5.0
     emin = 2400.0
     emax = 2500.0
-    xyc = 1990.0
-    zc = 5.0
+    xyc = 1e+6
+    zc = 0.0
 
     # Check minimum required arguments
     if length(ARGS) < 3

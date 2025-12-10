@@ -20,6 +20,19 @@ function getdirs(bdir::AbstractString)
 end
 
 
+function load_data(input_file, cmdir)
+    input_path = joinpath(cmdir, input_file)
+    dfs = get_dataset_dfs(input_path)
+    hitsdf = dfs["hits"]
+
+    println("Counting events from loaded data...")
+    ntot = length(unique(hitsdf.event_id))
+    println("Number of events with hits: $ntot")
+    return hitsdf
+end
+
+  
+
 function get_dataset_dfs(filename::String)
     h5open(filename, "r") do fid
         group = fid["MC"]

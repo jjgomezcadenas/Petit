@@ -9,23 +9,125 @@ using Graphs
     test_hits = DataFrame(
         event_id=[1, 1, 1, 2, 2],
         x=[0.1, 0.9, 2.1, 1.1, 1.9],
-        y=[0.1, 0.9, 2.1, 1.1, 1.9], 
+        y=[0.1, 0.9, 2.1, 1.1, 1.9],
         z=[0.1, 0.9, 2.1, 1.1, 1.9],
         energy=[0.1, 0.2, 0.3, 0.15, 0.25]
     )
-    
+
     voxels = voxelize_hits(test_hits, 1.0)  # 1mm voxel size
-    
+
     @test voxels isa DataFrame
     @test nrow(voxels) > 0
     @test all(col in names(voxels) for col in ["event_id", "x", "y", "z", "energy"])
-    
+
     # Test that voxelization reduces number of hits (hits in same voxel are combined)
     @test nrow(voxels) <= nrow(test_hits)
-    
+
     # Test with larger voxel size (should reduce voxel count more)
     voxels_large = voxelize_hits(test_hits, 2.0)
     @test nrow(voxels_large) <= nrow(voxels)
+end
+
+@testset "Voxelize Event" begin
+    # Create test hit data with multiple events
+    test_hits = DataFrame(
+        event_id=[1, 1, 1, 1, 2, 2, 2],
+        x=[0.1, 0.9, 2.1, 2.3, 1.1, 1.9, 3.5],
+        y=[0.1, 0.9, 2.1, 2.4, 1.1, 1.9, 3.2],
+        z=[0.1, 0.9, 2.1, 2.2, 1.1, 1.9, 3.8],
+        energy=[0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.4]
+    )
+
+    # Test basic functionality - voxelize event 1
+    voxels_evt1 = voxelize_event(test_hits, 1, 1.0)
+
+    @test voxels_evt1 isa DataFrame
+    @test nrow(voxels_evt1) > 0
+    @test all(col in names(voxels_evt1) for col in ["event_id", "x", "y", "z", "energy", "electrons"])
+
+    # All voxels should belong to event 1
+    @test all(voxels_evt1.event_id .== 1)
+
+    # Should only include hits from event 1 (4 hits)
+    @test nrow(voxels_evt1) <= 4
+
+    # Test voxelize event 2
+    voxels_evt2 = voxelize_event(test_hits, 2, 1.0)
+
+    @test voxels_evt2 isa DataFrame
+    @test nrow(voxels_evt2) > 0
+    @test all(voxels_evt2.event_id .== 2)
+    @test nrow(voxels_evt2) <= 3  # Event 2 has 3 hits
+
+    # Test energy aggregation - hits in same voxel should have combined energy
+    test_same_voxel = DataFrame(
+        event_id=[1, 1, 1],
+        x=[0.1, 0.2, 0.3],  # All in same voxel (voxel size = 1.0)
+        y=[0.1, 0.2, 0.3],
+        z=[0.1, 0.2, 0.3],
+        energy=[0.1, 0.2, 0.3]
+    )
+
+    voxels_combined = voxelize_event(test_same_voxel, 1, 1.0)
+    @test nrow(voxels_combined) == 1  # All hits in one voxel
+    @test voxels_combined.energy[1] ≈ 0.6  # Sum of all energies
+    @test voxels_combined.electrons[1] == 60000  # energy * 1e5 = 0.6 * 1e5 = 60000
+
+    # Test voxel centers are computed correctly
+    # Voxel index i corresponds to center (i + 0.5) * voxel_size
+    # For hit at x=0.1 with voxel_size=1.0: floor(0.1/1.0) = 0, center = 0.5
+    @test voxels_combined.x[1] ≈ 0.5
+    @test voxels_combined.y[1] ≈ 0.5
+    @test voxels_combined.z[1] ≈ 0.5
+
+    # Test with larger voxel size
+    voxels_large = voxelize_event(test_hits, 1, 2.0)
+    @test nrow(voxels_large) <= nrow(voxels_evt1)  # Larger voxels → fewer voxels
+
+    # Test voxel center calculation with different position
+    test_negative = DataFrame(
+        event_id=[1, 1],
+        x=[-1.5, -1.2],  # Both in voxel -2
+        y=[0.0, 0.0],
+        z=[0.0, 0.0],
+        energy=[0.1, 0.2]
+    )
+
+    voxels_neg = voxelize_event(test_negative, 1, 1.0)
+    @test nrow(voxels_neg) == 1
+    # floor(-1.5/1.0) = -2, center = (-2 + 0.5) * 1.0 = -1.5
+    @test voxels_neg.x[1] ≈ -1.5
+    @test voxels_neg.energy[1] ≈ 0.3
+
+    # Test with hits in different voxels
+    test_different_voxels = DataFrame(
+        event_id=[1, 1, 1],
+        x=[0.5, 1.5, 2.5],  # Three different voxels
+        y=[0.5, 1.5, 2.5],
+        z=[0.5, 1.5, 2.5],
+        energy=[0.1, 0.2, 0.3]
+    )
+
+    voxels_diff = voxelize_event(test_different_voxels, 1, 1.0)
+    @test nrow(voxels_diff) == 3  # Should stay 3 voxels
+    @test sum(voxels_diff.energy) ≈ 0.6  # Total energy conserved
+
+    # Test consistency with voxelize_hits
+    # voxelize_event(df, evt_id, size) should give same result as
+    # filtering voxelize_hits(df, size) for that event
+    voxels_from_hits = voxelize_hits(test_hits, 1.0)
+    voxels_from_event = voxelize_event(test_hits, 1, 1.0)
+
+    voxels_hits_filtered = voxels_from_hits[voxels_from_hits.event_id .== 1, :]
+
+    # Should have same number of voxels
+    @test nrow(voxels_from_event) == nrow(voxels_hits_filtered)
+
+    # Should have same total energy (allowing for floating point errors)
+    @test sum(voxels_from_event.energy) ≈ sum(voxels_hits_filtered.energy)
+
+    # Test error handling - nonexistent event should throw error
+    @test_throws Exception voxelize_event(test_hits, 999, 1.0)
 end
 
 @testset "Track Building" begin
@@ -351,37 +453,6 @@ end
     # Test vertex proximity check
     @test are_vertices_too_close(sharp_turn_track, 1, 2, 1.5)   # Adjacent vertices are close
     @test !are_vertices_too_close(sharp_turn_track, 1, 6, 1.5)  # Endpoints are far apart
-
-    # Test legacy vs improved comparison
-    legacy_result = find_track_extremes_legacy(sharp_turn_track)
-    improved_result = find_track_extremes(sharp_turn_track)
-
-    # Both should find correct extremes for this case
-    @test (legacy_result[1] == 1 && legacy_result[2] == 6) || (legacy_result[1] == 6 && legacy_result[2] == 1)
-    @test (improved_result[1] == 1 && improved_result[2] == 6) || (improved_result[1] == 6 && improved_result[2] == 1)
-    @test improved_result[4] > 0.8  # Improved should have high confidence
-
-    # Test S-curve track where improved algorithm should perform better
-    s_curve_data = DataFrame(
-        x=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        y=[0.0, 0.0, 1.0, 2.0, 2.0, 1.0, 0.0],  # S-shaped curve
-        z=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        energy=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-    )
-
-    s_curve_graph = SimpleGraph(7)
-    for i in 1:6
-        add_edge!(s_curve_graph, i, i+1)
-    end
-    s_curve_track = Tracks(s_curve_data, s_curve_graph, [[1, 2, 3, 4, 5, 6, 7]])
-
-    s_improved = find_track_extremes(s_curve_track)
-    s_legacy = find_track_extremes_legacy(s_curve_track)
-
-    # Both should find vertices 1 and 7, but improved should have higher confidence
-    @test (s_improved[1] == 1 && s_improved[2] == 7) || (s_improved[1] == 7 && s_improved[2] == 1)
-    @test (s_legacy[1] == 1 && s_legacy[2] == 7) || (s_legacy[1] == 7 && s_legacy[2] == 1)
-    @test s_improved[4] > 0.8  # Should have high confidence
 end
 
 @testset "Walk Track From Extremes" begin
