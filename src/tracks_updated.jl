@@ -1,6 +1,7 @@
 using LinearAlgebra
 using Graphs
 using NearestNeighbors
+using SparseArrays
 
 
 """
@@ -1547,6 +1548,15 @@ function find_extremes_combined(track::Tracks)
         curv_length = calculate_path_length(track, curv_result[3])
 
         # Choose the method that gives the longest path
+
+        if use_mst_fallback
+            mst_result = find_extremes_mst_diameter(track, coords)
+            mst_length = mst_result[5]
+            if mst_length >= max(spatial_length, curv_length, topo_length)
+                return (mst_result[1], mst_result[2], mst_result[3], 1.0)
+            end
+        end
+
         if spatial_length >= topo_length && spatial_length >= curv_length
             return spatial_result
         elseif topo_length >= curv_length
@@ -2219,7 +2229,7 @@ Key optimizations:
 3. Early exit when topology gives high confidence
 4. Energy-weighted method for dense tracks (Bragg peak detection)
 """
-function find_extremes_combined_opt(track::Tracks, coords::TrackCoords; use_energy_weighting::Bool=true)
+function find_extremes_combined_opt(track::Tracks, coords::TrackCoords; use_energy_weighting::Bool=true, use_edge_energy_weighting::Bool=true, use_mst_fallback::Bool=false)
     g = track.graph
     n_vertices = nv(g)
 
@@ -2243,10 +2253,30 @@ function find_extremes_combined_opt(track::Tracks, coords::TrackCoords; use_ener
 
     if is_dense
         # Dense track: use energy-weighted method (best for Bragg peak detection)
+
+        # Dense track: energy-aware traversal can suppress geometric shortcuts
+        if use_edge_energy_weighting
+            edge_result = find_extremes_edge_energy_weighted_opt(track, coords)
+            edge_confidence = edge_result[4]
+            edge_length = edge_result[5]
+            if edge_confidence >= 0.85 || edge_length > topo_length * 1.1
+                return (edge_result[1], edge_result[2], edge_result[3], edge_confidence)
+            end
+        end
+
         if use_energy_weighting
             energy_result = find_extremes_energy_weighted_opt(track, coords)
             energy_confidence = energy_result[4]
             energy_length = energy_result[5]
+
+            if use_mst_fallback
+                mst_result = find_extremes_mst_diameter(track, coords)
+                mst_length = mst_result[5]
+                if mst_length >= max(spatial_length, curv_length, topo_length, energy_length)
+                    return (mst_result[1], mst_result[2], mst_result[3], 1.0)
+                end
+            end
+
 
             # Energy method is preferred for dense tracks
             if energy_confidence >= 0.85 || energy_length > topo_length * 1.1
@@ -2270,8 +2300,26 @@ function find_extremes_combined_opt(track::Tracks, coords::TrackCoords; use_ener
         if use_energy_weighting
             energy_result = find_extremes_energy_weighted_opt(track, coords)
             energy_length = energy_result[5]
+
+            if use_mst_fallback
+                mst_result = find_extremes_mst_diameter(track, coords)
+                mst_length = mst_result[5]
+                if mst_length >= max(spatial_length, curv_length, topo_length, energy_length)
+                    return (mst_result[1], mst_result[2], mst_result[3], 1.0)
+                end
+            end
+
             if energy_length >= spatial_length && energy_length >= curv_length && energy_length >= topo_length
                 return (energy_result[1], energy_result[2], energy_result[3], energy_result[4])
+            end
+        end
+
+
+        if use_mst_fallback
+            mst_result = find_extremes_mst_diameter(track, coords)
+            mst_length = mst_result[5]
+            if mst_length >= max(spatial_length, curv_length, topo_length)
+                return (mst_result[1], mst_result[2], mst_result[3], 1.0)
             end
         end
 
@@ -2652,3 +2700,314 @@ function compute_extreme_distances(reco_path::DataFrame, mc_path::DataFrame)
         return (d1=d_r1_m2, d2=d_r2_m1, total=crossed_total, pairing=:crossed)
     end
 end
+
+
+############################
+# Energy-weighted traversal #
+############################
+
+"""
+    energy_weight_matrix(g, coords, energy; epsE=1e-6, α=1.0, β=1.0) -> SparseMatrixCSC{Float64,Int}
+
+Build a sparse weight matrix for `dijkstra_shortest_paths` on an unweighted graph `g`.
+
+Edge cost model (default):
+    w_ij = (d_ij^α) / ((0.5*(E_i + E_j) + epsE)^β)
+
+- `coords` must be 3×N (Float64) with columns aligned to graph vertices.
+- `energy` is a length-N vector (Float64), typically `track.voxels.energy` or `track.voxels.electrons`.
+- `epsE` prevents blow-up when energies are small.
+- `α` controls geometric emphasis (α=1 is linear distance).
+- `β` controls energy emphasis (β=1 is inverse-energy).
+"""
+function energy_weight_matrix(g::SimpleGraph,
+                              coords::AbstractMatrix{<:Real},
+                              energy::AbstractVector{<:Real};
+                              epsE::Float64 = 1e-6,
+                              α::Float64 = 1.0,
+                              β::Float64 = 1.0)
+
+    n = nv(g)
+    I = Int[]
+    J = Int[]
+    V = Float64[]
+
+    @inbounds for e in edges(g)
+        i = src(e); j = dst(e)
+
+        dx = float(coords[1,i] - coords[1,j])
+        dy = float(coords[2,i] - coords[2,j])
+        dz = float(coords[3,i] - coords[3,j])
+        d  = sqrt(dx*dx + dy*dy + dz*dz)
+
+        Ej = 0.5*(float(energy[i]) + float(energy[j])) + epsE
+        w  = (d^α) / (Ej^β)
+
+        # symmetric
+        push!(I,i); push!(J,j); push!(V,w)
+        push!(I,j); push!(J,i); push!(V,w)
+    end
+
+    return sparse(I, J, V, n, n)
+end
+
+
+"""
+    dijkstra_path(g, src, dst, W) -> Vector{Int}
+
+Reconstruct a shortest path from `src` to `dst` using Dijkstra parents.
+Returns an empty vector if `dst` is unreachable.
+"""
+function dijkstra_path(g::SimpleGraph, srcv::Int, dstv::Int, W)
+    sp = dijkstra_shortest_paths(g, srcv, W)
+    parents = sp.parents
+
+    dstv > length(parents) && return Int[]
+    isinf(sp.dists[dstv]) && return Int[]
+
+    path = Int[dstv]
+    v = dstv
+    while v != srcv
+        p = parents[v]
+        (p == 0 || p == v) && return Int[]  # unreachable / broken parent chain
+        push!(path, p)
+        v = p
+    end
+    reverse!(path)
+    return path
+end
+
+
+"""
+    find_extremes_edge_energy_weighted_opt(track, coords; epsE=1e-6, α=1.0, β=1.0)
+        -> (extreme1, extreme2, path, confidence, path_length)
+
+Energy-weighted *edge-cost* extreme finding:
+1) Build sparse weight matrix from geometry + voxel energies
+2) Double-sweep using weighted Dijkstra distances
+3) Return endpoints and the weighted-shortest path between them
+
+This is specifically designed to suppress "geometric shortcuts" that run through
+low-support (low-energy) regions while preserving the connected manifold.
+"""
+function find_extremes_edge_energy_weighted_opt(track::Tracks, coords::TrackCoords;
+                                               epsE::Float64 = 1e-6,
+                                               α::Float64 = 1.0,
+                                               β::Float64 = 1.0)
+
+    g = track.graph
+    n = nv(g)
+    n == 0 && return (nothing, nothing, Int[], 0.0, 0.0)
+    n == 1 && return (1, 1, [1], 1.0, 0.0)
+
+    # 3×N coordinate matrix aligned to graph vertices
+    coord_matrix = hcat(coords.x, coords.y, coords.z)'
+
+    # energy vector aligned to vertices (use energy by default)
+    E = Float64.(track.voxels.energy)
+
+    # robust epsilon scaled to typical energy
+    epsE_eff = max(epsE, 1e-6 * max(maximum(E), 1e-12))
+
+    W = energy_weight_matrix(g, coord_matrix, E; epsE=epsE_eff, α=α, β=β)
+
+    # Double sweep in weighted metric
+    d1 = dijkstra_shortest_paths(g, 1, W).dists
+    u = argmax(d1)
+    d2 = dijkstra_shortest_paths(g, u, W).dists
+    v = argmax(d2)
+
+    path = dijkstra_path(g, u, v, W)
+    isempty(path) && return (u, v, Int[], 0.0, 0.0)
+
+    # Physical (Euclidean) path length along the returned vertex sequence
+    path_length = calculate_path_length_from_coords(coord_matrix, path)
+
+    # Confidence: combine coverage proxy + endpoint separation proxy
+    # (keep it simple and diagnostic-driven; you can refine later)
+    D_end = euclidean_distance(coords.x[u], coords.y[u], coords.z[u],
+                               coords.x[v], coords.y[v], coords.z[v])
+    η = (D_end > 0) ? (path_length / D_end) : Inf
+    # η>1 indicates non-trivial curvature; extremely small η indicates shortcutting
+    confidence = clamp(0.5 + 0.5 * tanh((η - 1.05) / 0.25), 0.0, 1.0)
+
+    return (u, v, path, confidence, path_length)
+end
+
+
+#################
+# MST + diameter #
+#################
+
+"""
+    compute_mst_graph(g, coords) -> SimpleGraph
+
+Compute an MST (minimum spanning tree) as an unweighted `SimpleGraph` using
+Euclidean distances for edges already present in `g`.
+
+Note: MST can be used as a fallback/topology-cleaner for pathological cases.
+"""
+function compute_mst_graph(g::SimpleGraph, coords::AbstractMatrix{<:Real})
+    n = nv(g)
+    (n <= 1 || ne(g) == 0) && return g
+
+    # Build a dense distance matrix only for existing edges; others are ignored by `kruskal_mst`.
+    distmx = fill(Inf, n, n)
+    @inbounds for e in edges(g)
+        i = src(e); j = dst(e)
+        dx = float(coords[1,i] - coords[1,j])
+        dy = float(coords[2,i] - coords[2,j])
+        dz = float(coords[3,i] - coords[3,j])
+        d  = sqrt(dx*dx + dy*dy + dz*dz)
+        distmx[i,j] = d
+        distmx[j,i] = d
+    end
+
+    mst_edges = kruskal_mst(g, distmx)  # returns an edge iterator/collection
+    mst = SimpleGraph(n)
+    for e in mst_edges
+        add_edge!(mst, src(e), dst(e))
+    end
+    return mst
+end
+
+
+"""
+    find_extremes_mst_diameter(track, coords) -> (extreme1, extreme2, path, confidence, path_length)
+
+Fallback method:
+1) Build MST from `track.graph`
+2) Find diameter endpoints by double BFS (unweighted)
+3) Return BFS path and Euclidean path length
+"""
+function find_extremes_mst_diameter(track::Tracks, coords::TrackCoords)
+    g = track.graph
+    n = nv(g)
+    n == 0 && return (nothing, nothing, Int[], 0.0, 0.0)
+    n == 1 && return (1, 1, [1], 1.0, 0.0)
+
+    coord_matrix = hcat(coords.x, coords.y, coords.z)'
+    mst = compute_mst_graph(g, coord_matrix)
+
+    d1 = gdistances(mst, 1)
+    u = argmax(d1)
+    d2 = gdistances(mst, u)
+    v = argmax(d2)
+
+    path = find_path_bfs_opt(mst, u, v)
+    path_length = calculate_path_length_from_coords(coord_matrix, path)
+
+    return (u, v, path, 1.0, path_length)
+end
+
+
+#####################
+# Diagnosis utilities #
+#####################
+
+"""
+    diagnose_path_efficiency(coords, path) -> (η, L_path, D_end)
+
+η = L_path / D_end, where:
+- L_path is Euclidean length along the vertex sequence `path`
+- D_end is straight-line distance between endpoints
+"""
+function diagnose_path_efficiency(coords::TrackCoords, path::Vector{Int})
+    isempty(path) && return (Inf, 0.0, 0.0)
+    coord_matrix = hcat(coords.x, coords.y, coords.z)'
+    L = calculate_path_length_from_coords(coord_matrix, path)
+    u = first(path); v = last(path)
+    D = euclidean_distance(coords.x[u], coords.y[u], coords.z[u],
+                           coords.x[v], coords.y[v], coords.z[v])
+    η = (D > 0) ? (L / D) : Inf
+    return (η, L, D)
+end
+
+
+"""
+    diagnose_endpoint_degrees(g, u, v) -> (deg_u, deg_v)
+"""
+diagnose_endpoint_degrees(g::SimpleGraph, u::Int, v::Int) = (degree(g, u), degree(g, v))
+
+
+"""
+    diagnose_skeleton_coverage(track, coords, path; R_cover, energy_col=:energy) -> (f, E_in, E_tot)
+
+Fraction of total energy within distance `R_cover` of the skeleton path.
+Uses a KDTree over skeleton vertices and nearest-neighbor queries.
+"""
+function diagnose_skeleton_coverage(track::Tracks, coords::TrackCoords, path::Vector{Int};
+                                   R_cover::Float64,
+                                   energy_col::Symbol = :energy)
+
+    vox = track.voxels
+    n = nrow(vox)
+    (n == 0 || isempty(path)) && return (0.0, 0.0, 0.0)
+
+    # Total energy
+    Evec = Float64.(getproperty(vox, energy_col))
+    Etot = sum(Evec)
+    Etot == 0 && return (0.0, 0.0, 0.0)
+
+    # Build KDTree over skeleton points
+    Ns = length(path)
+    skel = Matrix{Float64}(undef, 3, Ns)
+    @inbounds for (k, idx) in enumerate(path)
+        skel[1,k] = coords.x[idx]
+        skel[2,k] = coords.y[idx]
+        skel[3,k] = coords.z[idx]
+    end
+    tree = KDTree(skel)
+
+    Ein = 0.0
+    @inbounds for i in 1:n
+        idxs, dists = knn(tree, [coords.x[i], coords.y[i], coords.z[i]], 1, true)
+        if !isempty(dists) && dists[1] <= R_cover
+            Ein += Evec[i]
+        end
+    end
+
+    f = Ein / Etot
+    return (f, Ein, Etot)
+end
+
+
+"""
+    diagnose_endpoint_stability(f1, f2, coords; match_by=:minsum) -> Δ
+
+Compute endpoint displacement between two solutions (u1,v1) and (u2,v2) given the same `coords`.
+Allows swapping endpoints to minimize total displacement.
+- `f1`, `f2` are tuples with endpoints as their first two elements (u,v,...).
+"""
+function diagnose_endpoint_stability(res1, res2, coords::TrackCoords)
+    u1, v1 = res1[1], res1[2]
+    u2, v2 = res2[1], res2[2]
+
+    (u1 === nothing || v1 === nothing || u2 === nothing || v2 === nothing) && return Inf
+
+    function dist(a,b)
+        euclidean_distance(coords.x[a], coords.y[a], coords.z[a],
+                           coords.x[b], coords.y[b], coords.z[b])
+    end
+
+    d_noswap = max(dist(u1,u2), dist(v1,v2))
+    d_swap   = max(dist(u1,v2), dist(v1,u2))
+    return min(d_noswap, d_swap)
+end
+
+
+"""
+    diagnose_track_extent(coords, vertices=1:length(coords.x)) -> extent_mm
+
+Compute a crude spatial extent (diagonal of bounding box) for selected vertices.
+Useful for conditioning shortcut alarms (η near 1 is only suspicious if extent is large).
+"""
+function diagnose_track_extent(coords::TrackCoords, vertices::AbstractVector{Int}=collect(1:length(coords.x)))
+    isempty(vertices) && return 0.0
+    xs = coords.x[vertices]; ys = coords.y[vertices]; zs = coords.z[vertices]
+    dx = maximum(xs) - minimum(xs)
+    dy = maximum(ys) - minimum(ys)
+    dz = maximum(zs) - minimum(zs)
+    return sqrt(dx*dx + dy*dy + dz*dz)
+end
+

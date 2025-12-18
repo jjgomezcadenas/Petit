@@ -282,6 +282,158 @@ function diffuse_xyz_image_mc(df::DataFrame; sigma_t_mm=0.6, sigma_l_mm=0.6, nbi
     )
 end
 
+
+#=
+# COMMENTED OUT: This function requires ImageFiltering which has heavy dependencies
+# Use diffuse_xyz_image_mc() instead (Monte Carlo version)
+
+"""
+    diffuse_xyz_image_kernel(df::DataFrame; sigma_t_mm=0.6, sigma_l_mm=0.6, nbins=100, nsigma=3.0)
+
+Simulate 3D Gaussian diffusion using ImageFiltering.jl separable convolution.
+Bins hits into a 3D histogram and applies Gaussian blur using `imfilter`.
+
+# Arguments
+- `df::DataFrame`: DataFrame containing x, y, z, electrons columns
+- `sigma_t_mm::Float64`: Standard deviation of transverse diffusion (x, y) in mm (default: 0.6)
+- `sigma_l_mm::Float64`: Standard deviation of longitudinal diffusion (z) in mm (default: 0.6)
+- `nbins::Int`: Number of bins per dimension for the 3D histogram (default: 100)
+- `nsigma::Float64`: Number of sigmas for histogram padding (default: 3.0)
+
+# Returns
+- `DataFrame`: DataFrame with columns x, y, z, electrons representing the diffused 3D image
+
+# Performance
+Uses optimized separable Gaussian convolution from ImageFiltering.jl.
+Deterministic output (no random number generation).
+"""
+function diffuse_xyz_image_kernel(df::DataFrame; sigma_t_mm=0.6, sigma_l_mm=0.6, nbins=100, nsigma=3.0,
+                                   ef::Float64=1e+5/2.5)
+
+    # Extract hit positions and electron counts
+    x_hits = Float64.(df.x)
+    y_hits = Float64.(df.y)
+    z_hits = Float64.(df.z)
+
+    # Check if electrons column exists, otherwise use energy
+    if hasproperty(df, :electrons)
+        electrons = Float64.(df.electrons)
+    elseif hasproperty(df, :energy)
+        electrons = df.energy .* ef
+    else
+        @warn "DataFrame does not have 'electrons' column, using 1 electron per hit"
+        electrons = ones(Float64, length(x_hits))
+    end
+
+    n_hits = length(x_hits)
+    if n_hits == 0
+        event_id = nrow(df) > 0 ? df.event_id[1] : 0
+        return DataFrame(
+            event_id = Int[],
+            x = Float64[],
+            y = Float64[],
+            z = Float64[],
+            energy = Float64[],
+            electrons = Int[]
+        )
+    end
+
+    # Handle sigma_l = 0 case (no longitudinal diffusion, e.g., for ions)
+    no_z_diffusion = (sigma_l_mm <= 0.0)
+    sigma_l_eff = no_z_diffusion ? sigma_t_mm : sigma_l_mm  # Use sigma_t for range calculation
+
+    # Calculate histogram range with padding
+    x_min = minimum(x_hits) - nsigma * sigma_t_mm
+    x_max = maximum(x_hits) + nsigma * sigma_t_mm
+    y_min = minimum(y_hits) - nsigma * sigma_t_mm
+    y_max = maximum(y_hits) + nsigma * sigma_t_mm
+    z_min = minimum(z_hits) - nsigma * sigma_l_eff
+    z_max = maximum(z_hits) + nsigma * sigma_l_eff
+
+    # Create grid edges and compute bin widths
+    x_edges = range(x_min, x_max, length=nbins+1)
+    y_edges = range(y_min, y_max, length=nbins+1)
+    z_edges = range(z_min, z_max, length=nbins+1)
+
+    dx = x_edges[2] - x_edges[1]
+    dy = y_edges[2] - y_edges[1]
+    dz = z_edges[2] - z_edges[1]
+
+    # Bin centers as vectors
+    x_centers = collect((x_edges[1:end-1] .+ x_edges[2:end]) ./ 2)
+    y_centers = collect((y_edges[1:end-1] .+ y_edges[2:end]) ./ 2)
+    z_centers = collect((z_edges[1:end-1] .+ z_edges[2:end]) ./ 2)
+
+    # Bin hits into 3D histogram
+    hist = zeros(Float64, nbins, nbins, nbins)
+    @inbounds for i in 1:n_hits
+        ix = clamp(Int(floor((x_hits[i] - x_min) / dx)) + 1, 1, nbins)
+        iy = clamp(Int(floor((y_hits[i] - y_min) / dy)) + 1, 1, nbins)
+        iz = clamp(Int(floor((z_hits[i] - z_min) / dz)) + 1, 1, nbins)
+        hist[ix, iy, iz] += electrons[i]
+    end
+
+    # Build Gaussian kernel in bin units and apply filtering
+    σx_bins = sigma_t_mm / dx
+    σy_bins = sigma_t_mm / dy
+
+    if no_z_diffusion
+        # 2D blur only in x,y - no z diffusion for ions
+        kernel = KernelFactors.gaussian((σx_bins, σy_bins, 0.0))
+    else
+        σz_bins = sigma_l_mm / dz
+        kernel = KernelFactors.gaussian((σx_bins, σy_bins, σz_bins))
+    end
+
+    # Apply 3D Gaussian filtering
+    blurred = imfilter(hist, kernel, Fill(0.0))
+
+    # Count non-zero voxels first to preallocate
+    n_nonzero = 0
+    @inbounds for ix in 1:nbins, iy in 1:nbins, iz in 1:nbins
+        if blurred[ix, iy, iz] > 0.5
+            n_nonzero += 1
+        end
+    end
+
+    # Preallocate output arrays
+    result_x = Vector{Float64}(undef, n_nonzero)
+    result_y = Vector{Float64}(undef, n_nonzero)
+    result_z = Vector{Float64}(undef, n_nonzero)
+    result_electrons = Vector{Int}(undef, n_nonzero)
+
+    # Fill output arrays
+    idx = 1
+    @inbounds for ix in 1:nbins
+        for iy in 1:nbins
+            for iz in 1:nbins
+                count = blurred[ix, iy, iz]
+                if count > 0.5
+                    result_x[idx] = x_centers[ix]
+                    result_y[idx] = y_centers[iy]
+                    result_z[idx] = z_centers[iz]
+                    result_electrons[idx] = round(Int, count)
+                    idx += 1
+                end
+            end
+        end
+    end
+
+    # Get event_id
+    event_id = nrow(df) > 0 ? df.event_id[1] : 0
+
+    return DataFrame(
+        event_id = event_id,
+        x = result_x,
+        y = result_y,
+        z = result_z,
+        energy = result_electrons / ef,
+        electrons = result_electrons
+    )
+end
+=#
+
+
 """
     select_events_itaca(hitsdf, nevent; kwargs...)
 
@@ -378,3 +530,152 @@ function select_events_itaca(hitsdf::DataFrame, nevent::Int;
     return (mc_tracks, ion_tracks, ele_tracks)
 end
 
+
+# ============================================================
+# Helper functions for ITACA analysis scripts
+# (Previously in itaca_aux.jl)
+# ============================================================
+
+"""
+    get_sigma(particle_type, ldrft; dt, dl, tK, edrift, Pbar)
+
+Compute transverse and longitudinal sigma based on particle type.
+
+# Arguments
+- `particle_type`: "ion" or "electron"
+- `ldrft`: Drift length in cm
+- `dt`: Transverse diffusion coefficient mm/√cm (default: 3.5)
+- `dl`: Longitudinal diffusion coefficient mm/√cm (default: 0.9)
+- `tK`: Temperature in Kelvin (default: 297.0)
+- `edrift`: Drift field in V/cm (default: 500.0)
+- `Pbar`: Pressure in bar (default: 15.0)
+
+# Returns
+- `(σt, σl)`: Tuple of transverse and longitudinal sigma in mm
+"""
+function get_sigma(particle_type, ldrft;
+                   dt=3.5, dl=0.9,
+                   tK=297.0, edrift=500.0, Pbar=15.0)
+    if particle_type == "ion"
+        σt = sigma_t_ion_mm(tK, ldrft, edrift)
+        σl = 0.0
+    else
+        σt = sigma_t_mm(ldrft, Pbar; dtmm=dt)
+        σl = sigma_l_mm(ldrft, Pbar; dlmm=dl)
+    end
+    σt, σl
+end
+
+
+"""
+    get_energy_threshold(particle_type; energy_threshold_ions, energy_threshold_keV)
+
+Get energy threshold based on particle type.
+
+# Arguments
+- `particle_type`: "ion" or "electron"
+- `energy_threshold_ions`: Threshold for ions (default: 10.0)
+- `energy_threshold_keV`: Threshold in keV for electrons (default: 10.0)
+
+# Returns
+- Energy threshold in keV
+"""
+function get_energy_threshold(particle_type;
+                              energy_threshold_ions=10.0,
+                              energy_threshold_keV=10.0)
+    f = 1e+5/2.5  # ions per MeV
+    fkeV = f*1e-3  # ions per keV
+
+    if particle_type == "ion"
+        energy_threshold_keV = energy_threshold_ions/fkeV
+    end
+    energy_threshold_keV
+end
+
+
+"""
+    get_voxel_size_and_distance(ldrft, σt)
+
+Compute voxel size, MC voxel size, and max distance based on diffusion.
+
+# Arguments
+- `ldrft`: Drift length in cm
+- `σt`: Transverse sigma in mm
+
+# Returns
+- `(voxel_size, mcvox_size, max_distance)`: Tuple of sizes in mm
+"""
+function get_voxel_size_and_distance(ldrft, σt)
+    if ldrft > 50.0
+        voxel_scale = 1.5
+        voxel_distance_scale = 1.5
+    else
+        voxel_scale = 3.0
+        voxel_distance_scale = 2.0
+    end
+
+    voxel_size = σt * voxel_scale
+    mcvox_size = 0.5
+    max_distance = voxel_size * voxel_distance_scale
+    (voxel_size, mcvox_size, max_distance)
+end
+
+
+"""
+    length_and_energy_of_tracks(tracks)
+
+Get length (number of voxels) and energy (keV) for each track.
+
+# Returns
+- `(LT, E)`: Tuple of vectors with lengths and energies
+"""
+function length_and_energy_of_tracks(tracks)
+    LT = [length(track.voxels.energy) for track in tracks]
+    E = [sum(track.voxels.energy)*1e+3 for track in tracks]
+    LT, E
+end
+
+
+"""
+    kde_peaks(peaks, kde_f)
+
+Extract peak1 (leftmost) and peak2 (rightmost) from KDE peaks.
+Prominence is normalized by the KDE range.
+
+# Arguments
+- `peaks`: Result from find_peaks()
+- `kde_f`: KDE values (for normalization)
+
+# Returns
+NamedTuple with:
+- `peak1_left`, `peak1_right`, `peak1_prom`: Leftmost peak info
+- `peak2_left`, `peak2_right`, `peak2_prom`: Rightmost peak info
+
+Values are 0.0 if peak not found.
+"""
+function kde_peaks(peaks, kde_f)
+    # Default values (0 = not found)
+    peak1_left, peak1_right, peak1_prom = 0.0, 0.0, 0.0
+    peak2_left, peak2_right, peak2_prom = 0.0, 0.0, 0.0
+
+    f_range = maximum(kde_f) - minimum(kde_f)
+
+    if length(peaks.indices) >= 1
+        # Find leftmost peak (peak1)
+        left_idx = argmin(peaks.positions)
+        peak1_left = peaks.lefts[left_idx]
+        peak1_right = peaks.rights[left_idx]
+        peak1_prom = f_range > 0 ? peaks.proms[left_idx] / f_range : 0.0
+
+        if length(peaks.indices) >= 2
+            # Find rightmost peak (peak2)
+            right_idx = argmax(peaks.positions)
+            peak2_left = peaks.lefts[right_idx]
+            peak2_right = peaks.rights[right_idx]
+            peak2_prom = f_range > 0 ? peaks.proms[right_idx] / f_range : 0.0
+        end
+    end
+
+    (peak1_left=peak1_left, peak1_right=peak1_right, peak1_prom=peak1_prom,
+     peak2_left=peak2_left, peak2_right=peak2_right, peak2_prom=peak2_prom)
+end

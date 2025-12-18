@@ -38,6 +38,60 @@ end
 
 
 """
+    signal_eff(signal, cut) -> Float64
+
+Compute signal efficiency for a single cut threshold.
+Returns fraction of signal events with value > cut.
+
+# Arguments
+- `signal::AbstractVector{<:Real}`: Vector of signal values
+- `cut::Real`: Cut threshold
+
+# Returns
+- `Float64`: Signal efficiency (fraction passing cut)
+"""
+function signal_eff(signal::AbstractVector{<:Real}, cut::Real)
+    return count(x -> x > cut, signal) / length(signal)
+end
+
+
+"""
+    background_eff(background, cut) -> Float64
+
+Compute background efficiency for a single cut threshold.
+Returns fraction of background events with value > cut.
+
+# Arguments
+- `background::AbstractVector{<:Real}`: Vector of background values
+- `cut::Real`: Cut threshold
+
+# Returns
+- `Float64`: Background efficiency (fraction passing cut)
+"""
+function background_eff(background::AbstractVector{<:Real}, cut::Real)
+    return count(x -> x > cut, background) / length(background)
+end
+
+
+"""
+    background_rejection(background, cut) -> Float64
+
+Compute background rejection for a single cut threshold.
+Returns fraction of background events rejected (value <= cut).
+
+# Arguments
+- `background::AbstractVector{<:Real}`: Vector of background values
+- `cut::Real`: Cut threshold
+
+# Returns
+- `Float64`: Background rejection (1 - background_eff)
+"""
+function background_rejection(background::AbstractVector{<:Real}, cut::Real)
+    return 1.0 - background_eff(background, cut)
+end
+
+
+"""
     compute_efficiencies(signal, background; cuts) -> NamedTuple
 
 Compute signal and background efficiencies for a range of cuts.
@@ -220,8 +274,9 @@ function plot_fom_vs_cut(signal::AbstractVector{<:Real},
                          cuts::AbstractVector{<:Real} = range(0, 1000, length=101),
                          xlabel::String = "Cut Value",
                          title::String = "Figure of Merit vs Cut",
-                         mark_optimal::Bool = true)
-    fom_result = figure_of_merit(signal, background; cuts=cuts)
+                         mark_optimal::Bool = true,
+                         bias=1e-10)
+    fom_result = figure_of_merit(signal, background; cuts=cuts, epsilon=bias)
 
     p = plot(fom_result.cuts, fom_result.fom,
              label="FOM",

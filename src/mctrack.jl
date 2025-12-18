@@ -120,7 +120,7 @@ function voxelize_particle_hits(hits_df::DataFrame, mcvox_size::Float64)
 end
 
 """
-    compute_mc_path(event_df, mcvox_size)
+    compute_mc_path(event_df, mcvox_size; is_double_beta=false)
 
 Compute the Monte Carlo path by voxelizing primary particle hits.
 
@@ -128,16 +128,18 @@ For single electron: path follows particle_id=1 in time order.
 For double-beta: path goes from Bragg_peak_1 → vertex → Bragg_peak_2
   (electron 1 reversed, then electron 2 forward)
 
+# Arguments
+- `event_df::DataFrame`: DataFrame with hits (must have particle_id column)
+- `mcvox_size::Float64`: Voxel size for MC path
+- `is_double_beta::Bool`: If true, treat as double-beta (particle_id 1 and 2 are both primary).
+                          If false, treat as single electron (only particle_id 1 is primary).
+
 Returns a DataFrame with columns: x, y, z, energy, s (arc-length), primary_electron
   - primary_electron: 1 for all voxels in single-electron events
                       1 or 2 for double-beta, indicating which electron
 """
-function compute_mc_path(event_df::DataFrame, mcvox_size::Float64)
-    # Check for double-beta (two primary particles)
-    particle_ids = unique(event_df.particle_id)
-    has_two_particles = (1 in particle_ids) && (2 in particle_ids)
-
-    if has_two_particles
+function compute_mc_path(event_df::DataFrame, mcvox_size::Float64; is_double_beta::Bool=false)
+    if is_double_beta
         # Double-beta decay: combine both electrons
         hits1 = filter(row -> row.particle_id == 1, event_df)
         hits2 = filter(row -> row.particle_id == 2, event_df)

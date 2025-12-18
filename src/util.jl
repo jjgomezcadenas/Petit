@@ -1,5 +1,6 @@
 using DataFrames
-import Glob 
+using CSV
+import Glob
 using HDF5
 
 
@@ -39,12 +40,26 @@ function get_dataset_dfs(filename::String)
         dfs = Dict{String, DataFrame}()
 
         for name in keys(group)
-            data = read(group[name])
-            # Try to make a DataFrame if it's an array of structs or tuples
-            try
-                dfs[name] = DataFrame(data)
-            catch
-                dfs[name] = DataFrame((value=data,))
+            obj = group[name]
+
+            if obj isa HDF5.Group
+                # Columnar format: each column is a separate dataset
+                col_names = keys(obj)
+                if !isempty(col_names)
+                    cols = Dict{Symbol, Any}()
+                    for col in col_names
+                        cols[Symbol(col)] = read(obj[col])
+                    end
+                    dfs[name] = DataFrame(cols)
+                end
+            else
+                # Compound dataset format: single dataset with multiple fields
+                data = read(obj)
+                try
+                    dfs[name] = DataFrame(data)
+                catch
+                    dfs[name] = DataFrame((value=data,))
+                end
             end
         end
 
@@ -488,4 +503,20 @@ function find_max_xy(x::Vector{<:Real}, y::Vector{<:Real})
 	ymax, imax = findmax(y)
 	x_ymax     = x[imax]
 	return imax, x_ymax, ymax
+end
+
+
+"""
+    load_csv_results(filepath::String) -> DataFrame
+
+Load a CSV file into a DataFrame.
+
+# Arguments
+- `filepath::String`: Path to the CSV file
+
+# Returns
+- `DataFrame`: The loaded data
+"""
+function load_csv_results(filepath::String)
+    CSV.read(filepath, DataFrame)
 end

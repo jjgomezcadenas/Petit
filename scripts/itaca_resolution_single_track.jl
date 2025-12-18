@@ -15,71 +15,15 @@ using Dates
 
 # Load Petit module
 include(joinpath(pdir, "src", "Petit.jl"))
-include(joinpath(pdir, "src", "itaca_aux.jl"))
-
-# Import Petit module functions
 import .Petit
+# Helper functions (get_sigma, get_voxel_size_and_distance, get_energy_threshold)
+# are now part of Petit module via itaca_functions.jl
 
 const cmdir = joinpath(ENV["DATA"], "HD5t/itaca")
 
 #=============================================================================
-# Helper Functions (same as itaca_single_track_analysis.jl)
+# Helper Functions
 =============================================================================#
-
-"""
-    get_sigma(particle_type, ldrft; dt, dl, tK, edrift, Pbar)
-
-Compute transverse and longitudinal sigma based on particle type.
-"""
-function get_sigma(particle_type, ldrft;
-                   dt = 3.5, dl = 0.9,
-                   tK = 297.0, edrift = 500.0, Pbar=15.0)
-    if particle_type == "ion"
-        σt = Petit.sigma_t_ion_mm(tK, ldrft, edrift)
-        σl = 0.0
-    else
-        σt = Petit.sigma_t_mm(ldrft, Pbar; dtmm=dt)
-        σl = Petit.sigma_l_mm(ldrft, Pbar; dlmm=dl)
-    end
-    σt, σl
-end
-
-"""
-    get_voxel_size_and_distance(ldrft, σt)
-
-Compute voxel size, MC voxel size, and max distance based on diffusion.
-"""
-function get_voxel_size_and_distance(ldrft, σt)
-    if ldrft > 50.0
-        voxel_scale = 2.0
-        voxel_distance_scale = 1.5
-    else
-        voxel_scale = 3.0
-        voxel_distance_scale = 2.0
-    end
-
-    voxel_size = σt * voxel_scale
-    mcvox_size = voxel_size
-    max_distance = voxel_size * voxel_distance_scale
-    (voxel_size, mcvox_size, max_distance)
-end
-
-"""
-    get_energy_threshold(particle_type; energy_threshold_ions, energy_threshold_keV)
-
-Get energy threshold based on particle type.
-"""
-function get_energy_threshold(particle_type;
-                              energy_threshold_ions = 10.0,
-                              energy_threshold_keV = 10.0)
-    f = 1e+5/2.5 # ions per MeV
-    fkeV = f*1e-3 # ions per keV
-
-    if particle_type == "ion"
-        energy_threshold_keV = energy_threshold_ions/fkeV
-    end
-    energy_threshold_keV
-end
 
 """
     save_plot(plt, plotdir, nevent, ldrft, name)
@@ -216,12 +160,12 @@ function process_event_at_drift(event_df, nevent, ldrft, particle_type,
     println("\n  ─── L = $ldrft cm ───")
 
     # Compute diffusion parameters
-    σt, σl = get_sigma(particle_type, ldrft;
+    σt, σl = Petit.get_sigma(particle_type, ldrft;
                        dt=dt, dl=dl, tK=tK, edrift=edrift, Pbar=Pbar)
 
-    voxel_size, mcvox_size, max_distance = get_voxel_size_and_distance(ldrft, σt)
+    voxel_size, mcvox_size, max_distance = Petit.get_voxel_size_and_distance(ldrft, σt)
 
-    eth = get_energy_threshold(particle_type;
+    eth = Petit.get_energy_threshold(particle_type;
                                energy_threshold_ions=energy_threshold_ions,
                                energy_threshold_keV=energy_threshold_keV)
 
@@ -304,7 +248,7 @@ function process_event_at_drift(event_df, nevent, ldrft, particle_type,
     save_plot(plt, plotdir, nevent, ldrft, "peaks")
 
     # Extract peak1 (leftmost) and peak2 (rightmost) info
-    pk = kde_peaks(peaks, reco_kde.kde_f)
+    pk = Petit.kde_peaks(peaks, reco_kde.kde_f)
 
     println("    Peak1: left=$(round(pk.peak1_left, digits=1)), right=$(round(pk.peak1_right, digits=1)), prom=$(round(pk.peak1_prom, digits=3))")
     println("    Peak2: left=$(round(pk.peak2_left, digits=1)), right=$(round(pk.peak2_right, digits=1)), prom=$(round(pk.peak2_prom, digits=3))")

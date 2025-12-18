@@ -278,16 +278,6 @@ function match_itaca_events_df(mc_trk::TRK, ion_trk::TRK, ele_trk::TRK)
 end
 
 
-function track_energies_keV(tracks::Vector{Tracks})
-	E = Float64[]
-	for i in 1:length(tracks)
-		energy_kev = 1e+3 * sum(tracks[i].voxels.energy)
-		push!(E, energy_kev)
-	end
-	E
-end
-
-
 function blob_analysis(strks::Vector{Tracks}, r::Float64; nmax::Int=-1, nprint::Int=0)
 	eB1=Float64[]
 	eB2=Float64[]
