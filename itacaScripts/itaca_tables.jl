@@ -1,32 +1,37 @@
 #!/usr/bin/env julia
 
 """
-Generate efficiency tables from ITACA reconstruction results.
+Generate efficiency tables from analysis directory structure.
 
-Generates tables with:
-- Rows: ε_fid (fiducial efficiency), ε_1trk (single-track efficiency)
-- Columns: maxd=2mm (σt=1mm), maxd=20mm (σt=10mm)
+Scans a directory tree with structure:
+    <cmdir>/
+    ├── 0nubb/
+    │   ├── sigma1mm/   → contains results with pitch=2mm
+    │   └── sigma10mm/  → contains results with pitch=20mm
+    ├── bi214/
+    │   ├── sigma1mm/
+    │   └── sigma10mm/
+    ├── tl208/
+    └── xe137/
 
-Tables generated:
-1. 0nubb (signal)
-2. bi214-copper_shell
-3. bi214-copper_endcaps
-4. bi214-weighted_mean
-5. tl208-copper_shell
-6. tl208-copper_endcaps
-7. tl208-weighted_mean
-
-Directory structure expected:
-    itacaScripts/
-    ├── <isotope>/sigma1mm/   → contains maxd=2mm, 4mm results
-    ├── <isotope>/sigma10mm/  → contains maxd=40mm results
-    └── data_info/<isotope>_<zone>_info.csv
+Extracts single-track efficiency from each results directory and generates tables.
 
 Usage:
-    julia itaca_tables.jl [--output=<dir>]
+    julia itaca_tables.jl [options]
 
 Options:
-    --output=X    Output directory for tables (default: tables)
+    --cmdir=X       Base directory (default: analysis)
+    --output-dir=X  Output directory (default: tables)
+    --output=X      Output file prefix (default: efficiency_table)
+    --dry-run       Show what would be written without writing files
+    --help, -h      Show this help message
+
+Output:
+    Generates .md, .tex, and .csv files with 4 columns:
+    - Source: isotope and zone
+    - σ=1mm, pitch=2mm: efficiency
+    - σ=10mm, pitch=20mm: efficiency
+    - Ratio: σ=10mm / σ=1mm
 """
 
 # Add project path and activate BEFORE using packages
@@ -37,450 +42,542 @@ Pkg.instantiate()
 
 using JSON
 using Printf
-using CSV
-using DataFrames
+using Dates
 
-#=============================================================================
+# =============================================================================
 # Configuration
-=============================================================================#
+# =============================================================================
 
-const ISOTOPES = ["0nubb", "bi214", "tl208"]
-const ZONES = Dict(
-    "0nubb" => [nothing],  # signal, no zone
-    "bi214" => ["copper_shell", "copper_endcaps"],
-    "tl208" => ["copper_shell", "copper_endcaps"]
-)
+const ISOTOPES = ["0nubb", "bi214", "tl208", "xe137"]
+const SIGMA_DIRS = ["sigma1mm", "sigma10mm"]
 
-# maxd values to look for: 2 in sigma1mm; 20 in sigma10mm
-const MAXD_VALUES = [2, 20]
-
-# Mapping of maxd to sigma directory
-const MAXD_TO_SIGMA = Dict(
-    2 => "sigma1mm",
-    20 => "sigma10mm"
-)
-
-# Pattern components for each sigma (voxel = 1.5 × σt)
-const SIGMA_PATTERNS = Dict(
-    "sigma1mm" => "sigmat_1mm_sigmal_1mm_voxel_1.5mm",
-    "sigma10mm" => "sigmat_10mm_sigmal_3mm_voxel_15mm"
-)
-
-#=============================================================================
-# Helper Functions
-=============================================================================#
+# =============================================================================
+# Directory Parsing
+# =============================================================================
 
 """
-    read_info_csv(script_dir::String, isotope::String, zone::Union{String,Nothing})
+    parse_results_dirname(dirname::String)
 
-Read generation info from CSV file.
-Returns (num_events, saved_events) or nothing if file not found.
+Parse a results directory name to extract isotope, zone, and maxd.
+Examples:
+  - "0nubb_filtered_ecut_2400_2500_sigmat_1mm_sigmal_1mm_voxel_2mm_maxd_2mm_evt_1_1000"
+    → (isotope="0nubb", zone=nothing, maxd=2)
+  - "bi214_copper_shell_filtered_ecut_2400_2500_sigmat_1mm_sigmal_1mm_voxel_2mm_maxd_2mm_evt_1_end"
+    → (isotope="bi214", zone="copper_shell", maxd=2)
 """
-function read_info_csv(script_dir::String, isotope::String, zone::Union{String,Nothing})
-    # Build CSV filename
-    if isnothing(zone)
-        csv_name = "$(isotope)_info.csv"
-    else
-        csv_name = "$(isotope)_$(zone)_info.csv"
+function parse_results_dirname(dirname::String)
+    # Extract maxd value: look for _maxd_Xmm_ pattern
+    maxd_match = match(r"_maxd_(\d+)mm", dirname)
+    if maxd_match === nothing
+        return nothing
     end
-    csv_path = joinpath(script_dir, "data_info", csv_name)
+    maxd = parse(Int, maxd_match.captures[1])
 
-    if !isfile(csv_path)
-        println("  Warning: Info CSV not found: $csv_path")
+    # Determine isotope from the start of the name
+    isotope = nothing
+    for iso in ISOTOPES
+        if startswith(dirname, iso)
+            isotope = iso
+            break
+        end
+    end
+    if isotope === nothing
         return nothing
     end
 
-    df = CSV.read(csv_path, DataFrame)
+    # Extract zone (region) - appears between isotope and _filtered or _sigmat
+    # For 0nubb: no zone
+    # For bi214/tl208: zone like "copper_shell", "copper_endcaps", "ptfe_barrel"
+    zone = nothing
+    if isotope != "0nubb"
+        # Pattern: isotope_ZONE_filtered or isotope_ZONE_sigmat (without filtered)
+        # Try _filtered first, then _sigmat
+        zone_pattern1 = Regex("^$(isotope)_(.+?)_filtered")
+        zone_pattern2 = Regex("^$(isotope)_(.+?)_sigmat")
 
-    if nrow(df) == 0
-        println("  Warning: Info CSV is empty: $csv_path")
+        zone_match = match(zone_pattern1, dirname)
+        if zone_match === nothing
+            zone_match = match(zone_pattern2, dirname)
+        end
+
+        if zone_match !== nothing
+            zone = zone_match.captures[1]
+        end
+    end
+
+    return (isotope=isotope, zone=zone, maxd=maxd)
+end
+
+"""
+    read_single_track_efficiency(results_dir::String)
+
+Read statistics.json from a results directory and extract single-track efficiency.
+Returns the percentage of 1-track events from track_multiplicity.percentages["1"],
+converted to a fraction (0-1). Returns nothing if file not found or invalid.
+"""
+function read_single_track_efficiency(results_dir::String)
+    json_path = joinpath(results_dir, "statistics.json")
+    if !isfile(json_path)
         return nothing
     end
 
-    return (num_events=df.num_events[1], saved_events=df.saved_events[1])
-end
+    try
+        data = JSON.parsefile(json_path)
 
-"""
-    discover_results_dir(script_dir::String, isotope::String, zone::Union{String,Nothing}, maxd::Int)
+        # Get track_multiplicity.percentages["1"]
+        track_mult = get(data, "track_multiplicity", nothing)
+        if track_mult === nothing
+            @warn "No track_multiplicity in $json_path"
+            return nothing
+        end
 
-Find the results directory matching the given parameters.
-Returns the full path or nothing if not found.
-"""
-function discover_results_dir(script_dir::String, isotope::String, zone::Union{String,Nothing}, maxd::Int)
-    sigma_dir = MAXD_TO_SIGMA[maxd]
-    sigma_pattern = SIGMA_PATTERNS[sigma_dir]
+        percentages = get(track_mult, "percentages", nothing)
+        if percentages === nothing
+            @warn "No percentages in track_multiplicity in $json_path"
+            return nothing
+        end
 
-    # Build the search directory
-    search_dir = joinpath(script_dir, isotope, sigma_dir)
+        # Get the "1" key (single-track percentage)
+        single_pct = get(percentages, "1", nothing)
+        if single_pct === nothing
+            @warn "No '1' key in percentages in $json_path"
+            return nothing
+        end
 
-    if !isdir(search_dir)
-        println("  Warning: Sigma directory not found: $search_dir")
+        # Convert percentage to fraction
+        return single_pct / 100.0
+    catch e
+        @warn "Error reading $json_path: $e"
         return nothing
     end
-
-    # Build the expected directory name pattern
-    if isnothing(zone)
-        # 0nubb: 0nubb_filtered_ecut_2400_2500_sigmat_...
-        prefix = "$(isotope)_filtered_ecut_2400_2500_$(sigma_pattern)_maxd_$(maxd)mm"
-    else
-        # bi214/tl208: bi214_copper_shell_filtered_ecut_2400_2500_sigmat_...
-        prefix = "$(isotope)_$(zone)_filtered_ecut_2400_2500_$(sigma_pattern)_maxd_$(maxd)mm"
-    end
-
-    # Look for matching directory
-    for entry in readdir(search_dir)
-        entry_path = joinpath(search_dir, entry)
-        if isdir(entry_path) && entry == prefix
-            return entry_path
-        end
-    end
-
-    println("  Warning: Results directory not found for $(isotope)/$(zone) maxd=$(maxd)mm in $sigma_dir")
-    return nothing
 end
 
 """
-    read_statistics_json(results_dir::String)
+    discover_all_results(cmdir::String)
 
-Read reconstruction statistics from JSON file.
-Returns (n_events, n_single) or nothing if file not found.
+Walk the directory tree and collect all efficiency data.
+Returns a vector of named tuples: (isotope, zone, sigma, maxd, efficiency, path)
 """
-function read_statistics_json(results_dir::String)
-    stats_path = joinpath(results_dir, "statistics.json")
+function discover_all_results(cmdir::String)
+    results = Vector{NamedTuple{(:isotope, :zone, :sigma, :maxd, :efficiency, :path),
+                                 Tuple{String, Union{String, Nothing}, String, Int, Float64, String}}}()
 
-    if !isfile(stats_path)
-        println("  Warning: statistics.json not found in: $results_dir")
-        return nothing
-    end
-
-    stats = JSON.parsefile(stats_path)
-
-    counts = stats["track_multiplicity"]["counts"]
-    n_events = stats["metadata"]["n_events"]
-
-    # Get count of single-track events (key "1")
-    n_single = get(counts, "1", 0)
-
-    return (n_events=n_events, n_single=n_single)
-end
-
-"""
-    compute_efficiencies_for_table(info, stats)
-
-Compute efficiencies for table:
-- ε_fid = saved_events / num_events (fiducial efficiency from generation)
-- ε_1trk = n_single / n_events (single-track efficiency)
-"""
-function compute_efficiencies_for_table(info, stats)
-    ε_fid = info.saved_events / info.num_events
-    ε_1trk = stats.n_single / stats.n_events
-
-    return (ε_fid=ε_fid, ε_1trk=ε_1trk, saved_events=info.saved_events)
-end
-
-"""
-    compute_weighted_mean(results_shell, results_endcaps)
-
-Compute weighted mean of efficiencies using saved_events as weights.
-"""
-function compute_weighted_mean(results_shell::Dict, results_endcaps::Dict)
-    weighted_results = Dict{Int, NamedTuple}()
-
-    for maxd in MAXD_VALUES
-        if haskey(results_shell, maxd) && haskey(results_endcaps, maxd)
-            r_shell = results_shell[maxd]
-            r_endcaps = results_endcaps[maxd]
-
-            w_shell = r_shell.saved_events
-            w_endcaps = r_endcaps.saved_events
-            w_total = w_shell + w_endcaps
-
-            ε_fid_weighted = (r_shell.ε_fid * w_shell + r_endcaps.ε_fid * w_endcaps) / w_total
-            ε_1trk_weighted = (r_shell.ε_1trk * w_shell + r_endcaps.ε_1trk * w_endcaps) / w_total
-
-            weighted_results[maxd] = (ε_fid=ε_fid_weighted, ε_1trk=ε_1trk_weighted, saved_events=w_total)
-        end
-    end
-
-    return weighted_results
-end
-
-#=============================================================================
-# Table Generation Functions
-=============================================================================#
-
-"""
-    format_latex_scientific(x::Float64)
-
-Format number in LaTeX scientific notation: mantissa × 10^{exp}
-"""
-function format_latex_scientific(x::Float64)
-    if x == 0.0
-        return "0"
-    end
-    exp = floor(Int, log10(abs(x)))
-    mantissa = x / 10.0^exp
-    return @sprintf("\$%.2f \\times 10^{%d}\$", mantissa, exp)
-end
-
-"""
-    format_percentage(x::Float64)
-
-Format efficiency as percentage with 2 decimal places.
-"""
-function format_percentage(x::Float64)
-    return @sprintf("%.2f%%", x * 100)
-end
-
-"""
-    write_efficiency_table_md(results::Dict, isotope::String, zone::Union{String,Nothing}, output_dir::String)
-
-Write efficiency table in Markdown format.
-"""
-function write_efficiency_table_md(results::Dict{Int, NamedTuple}, isotope::String,
-                                    zone::Union{String,Nothing}, output_dir::String)
-    # Build filename
-    if isnothing(zone)
-        filename = "efficiency_$(isotope).md"
-        title = uppercase(isotope)
-    elseif zone == "weighted_mean"
-        filename = "efficiency_$(isotope)_weighted_mean.md"
-        title = "$(uppercase(isotope)) - Weighted Mean"
-    else
-        filename = "efficiency_$(isotope)_$(zone).md"
-        title = "$(uppercase(isotope)) - $(replace(zone, "_" => " "))"
-    end
-
-    filepath = joinpath(output_dir, filename)
-
-    open(filepath, "w") do f
-        println(f, "# Efficiency Table: $title")
-        println(f)
-        println(f, "| Efficiency | maxd=2mm | maxd=20mm |")
-        println(f, "|------------|----------|-----------|")
-
-        # ε_fid row
-        print(f, "| ε_fid |")
-        for maxd in MAXD_VALUES
-            if haskey(results, maxd)
-                print(f, " $(@sprintf("%.2e", results[maxd].ε_fid)) |")
-            else
-                print(f, " - |")
-            end
-        end
-        println(f)
-
-        # ε_1trk row
-        print(f, "| ε_1trk |")
-        for maxd in MAXD_VALUES
-            if haskey(results, maxd)
-                print(f, " $(@sprintf("%.2e", results[maxd].ε_1trk)) |")
-            else
-                print(f, " - |")
-            end
-        end
-        println(f)
-    end
-
-    println("  Saved: $filepath")
-    return filepath
-end
-
-"""
-    write_efficiency_table_tex(results::Dict, isotope::String, zone::Union{String,Nothing}, output_dir::String)
-
-Write efficiency table in LaTeX format.
-"""
-function write_efficiency_table_tex(results::Dict{Int, NamedTuple}, isotope::String,
-                                     zone::Union{String,Nothing}, output_dir::String)
-    # Build filename
-    if isnothing(zone)
-        filename = "efficiency_$(isotope).tex"
-        title = uppercase(isotope)
-    elseif zone == "weighted_mean"
-        filename = "efficiency_$(isotope)_weighted_mean.tex"
-        title = "$(uppercase(isotope)) - Weighted Mean"
-    else
-        filename = "efficiency_$(isotope)_$(zone).tex"
-        title = "$(uppercase(isotope)) - $(replace(zone, "_" => " "))"
-    end
-
-    filepath = joinpath(output_dir, filename)
-
-    open(filepath, "w") do f
-        # LaTeX preamble
-        println(f, "\\documentclass{standalone}")
-        println(f, "\\usepackage{booktabs}")
-        println(f, "\\usepackage{amsmath}")
-        println(f, "\\usepackage{caption}")
-        println(f, "\\begin{document}")
-        println(f, "\\footnotesize")
-        println(f, "\\begin{minipage}{\\textwidth}")
-        println(f, "\\captionof{table}{Efficiency table for $title}")
-        println(f, "\\centering")
-        println(f, "\\begin{tabular}{lcc}")
-        println(f, "\\toprule")
-        println(f, "Efficiency & maxd=2mm & maxd=20mm \\\\")
-        println(f, "\\midrule")
-
-        # ε_fid row
-        print(f, "\$\\epsilon_{\\text{fid}}\$ ")
-        for maxd in MAXD_VALUES
-            if haskey(results, maxd)
-                print(f, "& $(format_latex_scientific(results[maxd].ε_fid)) ")
-            else
-                print(f, "& -- ")
-            end
-        end
-        println(f, "\\\\")
-
-        # ε_1trk row
-        print(f, "\$\\epsilon_{1\\text{trk}}\$ ")
-        for maxd in MAXD_VALUES
-            if haskey(results, maxd)
-                print(f, "& $(format_latex_scientific(results[maxd].ε_1trk)) ")
-            else
-                print(f, "& -- ")
-            end
-        end
-        println(f, "\\\\")
-
-        # LaTeX closing
-        println(f, "\\bottomrule")
-        println(f, "\\end{tabular}")
-        println(f, "\\end{minipage}")
-        println(f, "\\end{document}")
-    end
-
-    println("  Saved: $filepath")
-    return filepath
-end
-
-#=============================================================================
-# Main Processing Functions
-=============================================================================#
-
-"""
-    process_isotope_zone(script_dir::String, isotope::String, zone::Union{String,Nothing})
-
-Process a single isotope/zone combination and collect efficiencies for all maxd values.
-Returns Dict{Int, NamedTuple} mapping maxd -> efficiencies.
-"""
-function process_isotope_zone(script_dir::String, isotope::String, zone::Union{String,Nothing})
-    results = Dict{Int, NamedTuple}()
-
-    # Read info CSV (same for all maxd values)
-    info = read_info_csv(script_dir, isotope, zone)
-    if isnothing(info)
-        return results
-    end
-
-    for maxd in MAXD_VALUES
-        # Find results directory
-        results_dir = discover_results_dir(script_dir, isotope, zone, maxd)
-        if isnothing(results_dir)
+    for isotope in ISOTOPES
+        isotope_dir = joinpath(cmdir, isotope)
+        if !isdir(isotope_dir)
+            @info "Skipping missing isotope directory: $isotope"
             continue
         end
 
-        # Read statistics
-        stats = read_statistics_json(results_dir)
-        if isnothing(stats)
-            continue
-        end
+        for sigma_dir in SIGMA_DIRS
+            sigma_path = joinpath(isotope_dir, sigma_dir)
+            if !isdir(sigma_path)
+                @info "Skipping missing sigma directory: $isotope/$sigma_dir"
+                continue
+            end
 
-        # Compute efficiencies
-        effs = compute_efficiencies_for_table(info, stats)
-        results[maxd] = effs
+            # Scan for results directories
+            for entry in readdir(sigma_path)
+                entry_path = joinpath(sigma_path, entry)
+                if !isdir(entry_path)
+                    continue
+                end
+
+                # Parse directory name
+                parsed = parse_results_dirname(entry)
+                if parsed === nothing
+                    @warn "Could not parse directory name: $entry"
+                    continue
+                end
+
+                # Read efficiency
+                efficiency = read_single_track_efficiency(entry_path)
+                if efficiency === nothing
+                    @warn "Could not read efficiency from: $entry_path"
+                    continue
+                end
+
+                push!(results, (
+                    isotope = parsed.isotope,
+                    zone = parsed.zone,
+                    sigma = sigma_dir,
+                    maxd = parsed.maxd,
+                    efficiency = efficiency,
+                    path = entry_path
+                ))
+
+                println("  Found: $(parsed.isotope) $(parsed.zone === nothing ? "" : "($(parsed.zone))") " *
+                        "$sigma_dir maxd=$(parsed.maxd)mm → ε_1trk = $(round(efficiency, digits=4))")
+            end
+        end
     end
 
     return results
 end
 
-"""
-    main()
+# =============================================================================
+# Table Generation
+# =============================================================================
 
-Main function to generate all efficiency tables.
 """
+    format_row_label(isotope::String, zone::Union{String, Nothing})
+
+Format a row label for the table.
+"""
+function format_row_label(isotope::String, zone::Union{String, Nothing})
+    if zone === nothing
+        return isotope
+    else
+        return "$isotope ($zone)"
+    end
+end
+
+"""
+    format_efficiency(eff::Union{Float64, Nothing})
+
+Format efficiency value for display.
+"""
+function format_efficiency(eff::Union{Float64, Nothing})
+    if eff === nothing
+        return "-"
+    elseif eff >= 0.01
+        return @sprintf("%.4f", eff)
+    else
+        # Scientific notation for small values
+        exp = floor(Int, log10(abs(eff)))
+        mantissa = eff / 10.0^exp
+        return @sprintf("%.2f×10^%d", mantissa, exp)
+    end
+end
+
+"""
+    format_efficiency_latex(eff::Union{Float64, Nothing})
+
+Format efficiency value in LaTeX.
+"""
+function format_efficiency_latex(eff::Union{Float64, Nothing})
+    if eff === nothing
+        return "-"
+    elseif eff >= 0.01
+        return @sprintf("%.4f", eff)
+    else
+        exp = floor(Int, log10(abs(eff)))
+        mantissa = eff / 10.0^exp
+        return @sprintf("\$%.2f \\times 10^{%d}\$", mantissa, exp)
+    end
+end
+
+"""
+    format_ratio(ratio::Union{Float64, Nothing})
+
+Format ratio value for display.
+"""
+function format_ratio(ratio::Union{Float64, Nothing})
+    if ratio === nothing
+        return "-"
+    else
+        return @sprintf("%.3f", ratio)
+    end
+end
+
+"""
+    build_table_data(results::Vector)
+
+Organize results into a simplified 4-column table structure.
+Returns a vector of named tuples: (label, sigma_1mm, sigma_10mm, ratio)
+where:
+- label: row label (isotope + zone)
+- sigma_1mm: efficiency for σ=1mm, pitch=2mm
+- sigma_10mm: efficiency for σ=10mm, pitch=20mm
+- ratio: sigma_10mm / sigma_1mm
+"""
+function build_table_data(results::Vector)
+    # Collect unique rows (isotope, zone) - maintain order
+    row_set = Set{Tuple{String, Union{String, Nothing}}}()
+    for r in results
+        push!(row_set, (r.isotope, r.zone))
+    end
+
+    # Sort rows: by isotope order, then by zone
+    rows = sort(collect(row_set), by = x -> (findfirst(==(x[1]), ISOTOPES), something(x[2], "")))
+
+    # Build table data
+    table_rows = Vector{NamedTuple{(:label, :sigma_1mm, :sigma_10mm, :ratio),
+                                    Tuple{String, Union{Float64, Nothing}, Union{Float64, Nothing}, Union{Float64, Nothing}}}}()
+
+    for (isotope, zone) in rows
+        label = format_row_label(isotope, zone)
+
+        # Find efficiency for sigma1mm (expect pitch=2mm)
+        sigma_1mm_eff = nothing
+        for r in results
+            if r.isotope == isotope && r.zone == zone && r.sigma == "sigma1mm"
+                sigma_1mm_eff = r.efficiency
+                break
+            end
+        end
+
+        # Find efficiency for sigma10mm (expect pitch=20mm)
+        sigma_10mm_eff = nothing
+        for r in results
+            if r.isotope == isotope && r.zone == zone && r.sigma == "sigma10mm"
+                sigma_10mm_eff = r.efficiency
+                break
+            end
+        end
+
+        # Compute ratio
+        ratio = nothing
+        if sigma_1mm_eff !== nothing && sigma_10mm_eff !== nothing && sigma_1mm_eff > 0
+            ratio = sigma_10mm_eff / sigma_1mm_eff
+        end
+
+        push!(table_rows, (label=label, sigma_1mm=sigma_1mm_eff, sigma_10mm=sigma_10mm_eff, ratio=ratio))
+    end
+
+    return table_rows
+end
+
+"""
+    write_markdown_table(table_data, output_path::String)
+
+Write the efficiency table in Markdown format.
+"""
+function write_markdown_table(table_data, output_path::String)
+    open(output_path, "w") do f
+        println(f, "# Single-Track Efficiency Table")
+        println(f)
+        println(f, "Generated: $(Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS"))")
+        println(f)
+
+        # Header row
+        println(f, "| Source | σ=1mm, pitch=2mm | σ=10mm, pitch=20mm | Ratio |")
+        println(f, "|--------|------------------|--------------------| ------|")
+
+        # Data rows
+        for row in table_data
+            eff_1mm = format_efficiency(row.sigma_1mm)
+            eff_10mm = format_efficiency(row.sigma_10mm)
+            ratio_str = format_ratio(row.ratio)
+            println(f, "| $(row.label) | $eff_1mm | $eff_10mm | $ratio_str |")
+        end
+    end
+
+    println("Saved Markdown table: $output_path")
+end
+
+"""
+    write_latex_table(table_data, output_path::String)
+
+Write the efficiency table in LaTeX format.
+"""
+function write_latex_table(table_data, output_path::String)
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS")
+    open(output_path, "w") do f
+        # Document header
+        println(f, "% Generated: $timestamp")
+        println(f, "\\documentclass{article}")
+        println(f, "\\usepackage{booktabs}")
+        println(f, "\\usepackage{siunitx}")
+        println(f, "\\begin{document}")
+        println(f)
+        println(f, "\\begin{table}[htbp]")
+        println(f, "\\centering")
+        println(f, "\\caption{Single-Track Efficiency (Generated: $timestamp)}")
+
+        # Table structure: 4 columns
+        println(f, "\\begin{tabular}{lccc}")
+        println(f, "\\toprule")
+
+        # Header row
+        println(f, "Source & \$\\sigma=1\\,\\text{mm}\$, pitch=2mm & \$\\sigma=10\\,\\text{mm}\$, pitch=20mm & Ratio \\\\")
+        println(f, "\\midrule")
+
+        # Data rows
+        for row in table_data
+            # Format isotope with superscript for LaTeX
+            label = row.label
+            # Replace isotope names with LaTeX formatting
+            label = replace(label, "0nubb" => "\$0\\nu\\beta\\beta\$")
+            label = replace(label, "bi214" => "\$^{214}\$Bi")
+            label = replace(label, "tl208" => "\$^{208}\$Tl")
+            label = replace(label, "xe137" => "\$^{137}\$Xe")
+            # Escape underscores
+            label = replace(label, "_" => "\\_")
+
+            eff_1mm = format_efficiency_latex(row.sigma_1mm)
+            eff_10mm = format_efficiency_latex(row.sigma_10mm)
+            ratio_str = format_ratio(row.ratio)
+
+            println(f, "$label & $eff_1mm & $eff_10mm & $ratio_str \\\\")
+        end
+
+        println(f, "\\bottomrule")
+        println(f, "\\end{tabular}")
+        println(f, "\\end{table}")
+        println(f)
+        println(f, "\\end{document}")
+    end
+
+    println("Saved LaTeX table: $output_path")
+end
+
+"""
+    write_csv_table(table_data, output_path::String)
+
+Write the efficiency table in CSV format.
+"""
+function write_csv_table(table_data, output_path::String)
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS")
+    open(output_path, "w") do f
+        # Timestamp and header row
+        println(f, "# Generated: $timestamp")
+        println(f, "source,sigma_1mm,sigma_10mm,ratio")
+
+        # Data rows
+        for row in table_data
+            eff_1mm = row.sigma_1mm === nothing ? "" : @sprintf("%.6f", row.sigma_1mm)
+            eff_10mm = row.sigma_10mm === nothing ? "" : @sprintf("%.6f", row.sigma_10mm)
+            ratio_str = row.ratio === nothing ? "" : @sprintf("%.6f", row.ratio)
+            println(f, "$(row.label),$eff_1mm,$eff_10mm,$ratio_str")
+        end
+    end
+
+    println("Saved CSV table: $output_path")
+end
+
+# =============================================================================
+# Main
+# =============================================================================
+
 function main()
-    script_dir = dirname(@__FILE__)
+    # Default values
+    cmdir = "analysis"
+    output_dir = "tables"
+    output_prefix = "efficiency_table"
+    dry_run = false
 
     # Parse arguments
-    output_dir = joinpath(script_dir, "tables")
-
     for arg in ARGS
-        if startswith(arg, "--")
-            parts = split(arg[3:end], '=')
-            if length(parts) == 2
-                key, value = parts
-                if key == "output"
-                    output_dir = String(value)
-                else
-                    println("Warning: Unknown argument: --$key")
-                end
-            end
+        if startswith(arg, "--cmdir=")
+            cmdir = String(split(arg, '=')[2])
+        elseif startswith(arg, "--output-dir=")
+            output_dir = String(split(arg, '=')[2])
+        elseif startswith(arg, "--output=")
+            output_prefix = String(split(arg, '=')[2])
+        elseif arg == "--dry-run"
+            dry_run = true
+        elseif arg == "--help" || arg == "-h"
+            println("""
+Usage: julia itaca_tables.jl [options]
+
+Options:
+    --cmdir=X       Base directory (default: analysis)
+    --output-dir=X  Output directory (default: tables)
+    --output=X      Output file prefix (default: efficiency_table)
+    --dry-run       Show what would be written without writing files
+    --help, -h      Show this help message
+
+Directory structure expected:
+    <cmdir>/
+    ├── 0nubb/sigma1mm/..., sigma10mm/...
+    ├── bi214/sigma1mm/..., sigma10mm/...
+    ├── tl208/sigma1mm/..., sigma10mm/...
+    └── xe137/sigma1mm/..., sigma10mm/...
+
+Output:
+    Generates three files in <output-dir>/:
+    - <prefix>.md   (Markdown format)
+    - <prefix>.tex  (LaTeX format)
+    - <prefix>.csv  (CSV format)
+
+    Table columns:
+    - Source: isotope and zone
+    - σ=1mm, pitch=2mm: efficiency
+    - σ=10mm, pitch=20mm: efficiency
+    - Ratio: σ=10mm / σ=1mm
+""")
+            return
+        else
+            @warn "Unknown argument: $arg"
         end
     end
 
-    # Create output directory
-    if !isdir(output_dir)
-        mkpath(output_dir)
-        println("Created output directory: $output_dir")
+    # Validate cmdir
+    if !isdir(cmdir)
+        error("Directory not found: $cmdir")
     end
 
-    println("=" ^ 70)
-    println("ITACA EFFICIENCY TABLES")
-    println("=" ^ 70)
+    println("=" ^ 60)
+    println("ITACA Efficiency Table Generator")
+    println("=" ^ 60)
+    println("Base directory: $cmdir")
     println("Output directory: $output_dir")
+    println("Output prefix: $output_prefix")
+    println("Dry run: $dry_run")
     println()
 
-    # Store results for weighted mean calculations
-    all_results = Dict{String, Dict{String, Dict{Int, NamedTuple}}}()
+    # Discover all results
+    println("Scanning directory tree...")
+    results = discover_all_results(cmdir)
 
-    for isotope in ISOTOPES
-        all_results[isotope] = Dict{String, Dict{Int, NamedTuple}}()
-
-        for zone in ZONES[isotope]
-            zone_name = isnothing(zone) ? "signal" : zone
-            println("Processing: $isotope / $zone_name")
-
-            results = process_isotope_zone(script_dir, isotope, zone)
-
-            if !isempty(results)
-                all_results[isotope][zone_name] = results
-
-                # Write tables
-                write_efficiency_table_md(results, isotope, zone, output_dir)
-                write_efficiency_table_tex(results, isotope, zone, output_dir)
-            else
-                println("  No results found for $isotope / $zone_name")
-            end
-            println()
-        end
-
-        # Compute weighted mean for bi214 and tl208
-        if isotope in ["bi214", "tl208"]
-            if haskey(all_results[isotope], "copper_shell") && haskey(all_results[isotope], "copper_endcaps")
-                println("Computing weighted mean for $isotope...")
-
-                weighted = compute_weighted_mean(
-                    all_results[isotope]["copper_shell"],
-                    all_results[isotope]["copper_endcaps"]
-                )
-
-                if !isempty(weighted)
-                    write_efficiency_table_md(weighted, isotope, "weighted_mean", output_dir)
-                    write_efficiency_table_tex(weighted, isotope, "weighted_mean", output_dir)
-                else
-                    println("  Warning: Could not compute weighted mean for $isotope")
-                end
-                println()
-            end
-        end
+    if isempty(results)
+        println("\nNo results found!")
+        return
     end
 
-    println("=" ^ 70)
-    println("Done! Tables saved to: $output_dir")
-    println("=" ^ 70)
+    println("\nFound $(length(results)) result directories")
+
+    # Build table structure
+    table_data = build_table_data(results)
+
+    println("\nTable structure:")
+    println("  Rows: $(length(table_data)) (isotope/zone combinations)")
+    println("  Columns: Source, σ=1mm, σ=10mm, Ratio")
+
+    # Preview table content
+    println("\nTable preview:")
+    println("-" ^ 60)
+    @printf("%-30s %10s %10s %8s\n", "Source", "σ=1mm", "σ=10mm", "Ratio")
+    println("-" ^ 60)
+    for row in table_data
+        eff_1mm = row.sigma_1mm === nothing ? "-" : @sprintf("%.4f", row.sigma_1mm)
+        eff_10mm = row.sigma_10mm === nothing ? "-" : @sprintf("%.4f", row.sigma_10mm)
+        ratio_str = row.ratio === nothing ? "-" : @sprintf("%.3f", row.ratio)
+        @printf("%-30s %10s %10s %8s\n", row.label, eff_1mm, eff_10mm, ratio_str)
+    end
+    println("-" ^ 60)
+
+    # Write output files
+    println()
+    if dry_run
+        println("DRY RUN - would write the following files:")
+        println("  - $(joinpath(output_dir, output_prefix)).md")
+        println("  - $(joinpath(output_dir, output_prefix)).tex")
+        println("  - $(joinpath(output_dir, output_prefix)).csv")
+    else
+        # Create output directory if needed
+        script_dir = dirname(@__FILE__)
+        full_output_dir = joinpath(script_dir, output_dir)
+        if !isdir(full_output_dir)
+            mkpath(full_output_dir)
+            println("Created output directory: $full_output_dir")
+        end
+
+        # Write all three formats
+        md_path = joinpath(full_output_dir, "$(output_prefix).md")
+        tex_path = joinpath(full_output_dir, "$(output_prefix).tex")
+        csv_path = joinpath(full_output_dir, "$(output_prefix).csv")
+
+        write_markdown_table(table_data, md_path)
+        write_latex_table(table_data, tex_path)
+        write_csv_table(table_data, csv_path)
+    end
+
+    println()
+    println("=" ^ 60)
+    println("Done!")
+    println("=" ^ 60)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

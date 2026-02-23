@@ -26,6 +26,7 @@ Options:
     --ievt=N            First event to process (default: 1)
     --levt=N            Last event to process (default: -1, all)
     --energy-threshold=X Energy threshold in keV (default: 1.0)
+    --grid-size=X       Grid size for occupancy histograms in mm (default: 160)
     --batch             Run in batch mode (no interactive plots, show statistics at end)
     --readdir           Read directory of part files (*_part_*.h5) and chain them
     --save-results=X    Save results to <filename>_results/ directory (default: true)
@@ -39,6 +40,7 @@ Pkg.instantiate()
 
 using HDF5
 using DataFrames
+using CSV
 using Statistics
 using StatsBase
 using Plots
@@ -64,17 +66,17 @@ function load_hits_from_directory(dirpath::String)
         error("Directory not found: $dirpath")
     end
 
-    # Find all part files matching pattern *_part_*.h5
+    # Find all part files matching pattern *_part_*.h5 or *.next_part_*.h5
     all_files = readdir(dirpath)
-    part_files = filter(f -> occursin(r"_part_\d+\.h5$", f), all_files)
+    part_files = filter(f -> occursin(r"[._]part_\d+\.h5$", f), all_files)
 
     if isempty(part_files)
-        error("No part files (*_part_*.h5) found in directory: $dirpath")
+        error("No part files (*_part_*.h5 or *.next_part_*.h5) found in directory: $dirpath")
     end
 
     # Sort by part number
     sort!(part_files, by = f -> begin
-        m = match(r"_part_(\d+)\.h5$", f)
+        m = match(r"[._]part_(\d+)\.h5$", f)
         m !== nothing ? parse(Int, m.captures[1]) : 0
     end)
 
@@ -171,40 +173,80 @@ function compute_track_z_extension(track::Petit.Tracks)
     return (z_min=z_min, z_max=z_max, z_length=z_length)
 end
 
+"""
+    compute_track_bbox(track::Petit.Tracks)
+
+Compute the bounding box of a track in the XY plane.
+
+Returns a NamedTuple with:
+- x_extent: Width in X direction (max(x) - min(x)) in mm
+- y_extent: Width in Y direction (max(y) - min(y)) in mm
+- x_min, x_max: X coordinate range
+- y_min, y_max: Y coordinate range
+"""
+function compute_track_bbox(track::Petit.Tracks)
+    voxels = track.voxels
+
+    if nrow(voxels) == 0
+        return (x_extent=0.0, y_extent=0.0, x_min=NaN, x_max=NaN, y_min=NaN, y_max=NaN)
+    end
+
+    x_min = minimum(voxels.x)
+    x_max = maximum(voxels.x)
+    y_min = minimum(voxels.y)
+    y_max = maximum(voxels.y)
+
+    x_extent = x_max - x_min
+    y_extent = y_max - y_min
+
+    return (x_extent=x_extent, y_extent=y_extent, x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max)
+end
+
 # Occupancy analysis constants
-const PIXEL_SIZE_MM = 4.0     # 4x4 mm² per pixel (200mm / 50 bins default)
 const TIME_SLOT_MM = 2.0      # 2 mm time slots (1 ms = 1 mm drift)
+const W_VALUE_EV = 22.0       # W-value for xenon: ~22 eV per ion pair
+# Note: PIXEL_SIZE_MM is now passed as a parameter (= max_distance from track building)
+
+# Ion threshold for pixel statistics (pixels with signal above this are counted)
+const ION_THRESHOLD = 10.0
 
 """
-    compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
+    compute_occupancy_analysis(track::Petit.Tracks; pixel_size_mm::Float64, nbins::Int=50)
 
 Compute detector pixel occupancy per time slot for a single track.
 
 The analysis:
-1. Centers an nbins x nbins pixel grid (4x4 mm² pixels) on the track barycenter
+1. Centers an nbins x nbins pixel grid on the track barycenter
 2. Slices the track into time slots (2 mm bins in z)
-3. For each time slot, fills a 2D histogram of pixel hits
-4. Computes summary statistics across all time slots
+3. For each time slot, fills a 2D histogram counting IONS (not voxels)
+4. Ion count = energy(MeV) * 1e6 / W_value (W = 22 eV for xenon)
+5. Computes summary statistics across all time slots
 
 Arguments:
 - track: The track to analyze
+- pixel_size_mm: Pixel size in mm (should match max_distance from track building)
 - nbins: Number of bins per side (default: 50, giving 50x50 grid)
 
 Returns a NamedTuple with:
 - n_time_slots: Number of time slots
 - z_length: Track z-extension (mm)
 - barycenter: (x, y, z) barycenter coordinates
-- avg_counts: nbins x nbins matrix of average counts per bin
-- max_counts: nbins x nbins matrix of maximum counts per bin
-- min_counts: nbins x nbins matrix of minimum counts per bin (NaN for bins never hit)
-- total_counts: nbins x nbins matrix of total counts (sum across all time slots)
+- avg_counts: nbins x nbins matrix of average ion counts per bin
+- max_counts: nbins x nbins matrix of maximum ion counts per bin
+- min_counts: nbins x nbins matrix of minimum ion counts per bin (NaN for bins never hit)
+- total_counts: nbins x nbins matrix of total ion counts (sum across all time slots)
 - occupancy_per_slot: Vector of occupancy fractions per time slot
 - avg_occupancy: Average occupancy across all time slots
 - nbins: Number of bins per side (for reference)
+- pixel_size_mm: Pixel size used (for reference)
+- avg_n_pixels_above_threshold: Average number of pixels with signal > ION_THRESHOLD per time slot
+- avg_max_signal: Average of the maximum signal per time slot
+- avg_min_signal: Average of the minimum signal (above ION_THRESHOLD) per time slot
+- avg_mean_signal: Average of the mean signal (for pixels above ION_THRESHOLD) per time slot
 """
-function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
+function compute_occupancy_analysis(track::Petit.Tracks; pixel_size_mm::Float64, nbins::Int=50)
     voxels = track.voxels
-    pixel_grid_size = nbins * PIXEL_SIZE_MM  # Total grid size in mm
+    pixel_grid_size = nbins * pixel_size_mm  # Total grid size in mm
 
     if nrow(voxels) == 0
         return (n_time_slots=0, z_length=0.0, barycenter=(x=NaN, y=NaN, z=NaN),
@@ -212,7 +254,10 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
                 max_counts=zeros(nbins, nbins),
                 min_counts=fill(NaN, nbins, nbins),
                 total_counts=zeros(nbins, nbins),
-                occupancy_per_slot=Float64[], avg_occupancy=0.0, nbins=nbins)
+                occupancy_per_slot=Float64[], avg_occupancy=0.0, nbins=nbins,
+                pixel_size_mm=pixel_size_mm,
+                avg_n_pixels_above_threshold=0.0, avg_max_signal=0.0,
+                avg_min_signal=0.0, avg_mean_signal=0.0)
     end
 
     # Compute barycenter and z-extension
@@ -228,6 +273,12 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
     min_counts = fill(Inf, nbins, nbins)
     occupancy_per_slot = Float64[]
 
+    # Per-slot statistics for new metrics
+    n_pixels_above_threshold_per_slot = Float64[]
+    max_signal_per_slot = Float64[]
+    min_signal_per_slot = Float64[]
+    mean_signal_per_slot = Float64[]
+
     # Define pixel grid edges centered on barycenter
     half_grid = pixel_grid_size / 2.0
     x_edges = range(bary.x - half_grid, bary.x + half_grid, length=nbins + 1)
@@ -242,12 +293,16 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
         mask = (voxels.z .>= z_slot_min) .& (voxels.z .< z_slot_max)
         slot_voxels = voxels[mask, :]
 
-        # Create 2D histogram for this slot
-        slot_counts = zeros(Int, nbins, nbins)
+        # Create 2D histogram for this slot (counting ions, not voxels)
+        slot_counts = zeros(Float64, nbins, nbins)
 
         for i in 1:nrow(slot_voxels)
             x = slot_voxels.x[i]
             y = slot_voxels.y[i]
+            energy_MeV = slot_voxels.energy[i]
+
+            # Convert energy to number of ions: E(MeV) * 1e6 / W_value(eV)
+            n_ions = energy_MeV * 1e6 / W_VALUE_EV
 
             # Find bin indices
             xi = searchsortedlast(collect(x_edges), x)
@@ -255,7 +310,7 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
 
             # Check bounds (1 to nbins)
             if 1 <= xi <= nbins && 1 <= yi <= nbins
-                slot_counts[xi, yi] += 1
+                slot_counts[xi, yi] += n_ions
             end
         end
 
@@ -274,6 +329,22 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
         n_occupied = count(slot_counts .> 0)
         occupancy = n_occupied / (nbins * nbins)
         push!(occupancy_per_slot, occupancy)
+
+        # Compute new pixel statistics for this slot (pixels above ION_THRESHOLD)
+        pixels_above = slot_counts[slot_counts .> ION_THRESHOLD]
+        n_above = length(pixels_above)
+        push!(n_pixels_above_threshold_per_slot, Float64(n_above))
+
+        if n_above > 0
+            push!(max_signal_per_slot, maximum(pixels_above))
+            push!(min_signal_per_slot, minimum(pixels_above))
+            push!(mean_signal_per_slot, mean(pixels_above))
+        else
+            # No pixels above threshold in this slot - use 0 for max/mean, NaN for min
+            push!(max_signal_per_slot, 0.0)
+            push!(min_signal_per_slot, NaN)
+            push!(mean_signal_per_slot, 0.0)
+        end
     end
 
     # Compute average counts
@@ -286,12 +357,23 @@ function compute_occupancy_analysis(track::Petit.Tracks; nbins::Int=50)
     # Average occupancy
     avg_occupancy = isempty(occupancy_per_slot) ? 0.0 : mean(occupancy_per_slot)
 
+    # Compute averages of new metrics
+    avg_n_pixels_above_threshold = isempty(n_pixels_above_threshold_per_slot) ? 0.0 : mean(n_pixels_above_threshold_per_slot)
+    avg_max_signal = isempty(max_signal_per_slot) ? 0.0 : mean(max_signal_per_slot)
+    # For min signal, only average over slots that had pixels above threshold
+    valid_min_signals = filter(!isnan, min_signal_per_slot)
+    avg_min_signal = isempty(valid_min_signals) ? 0.0 : mean(valid_min_signals)
+    avg_mean_signal = isempty(mean_signal_per_slot) ? 0.0 : mean(mean_signal_per_slot)
+
     return (n_time_slots=n_time_slots, z_length=z_ext.z_length,
             barycenter=(x=bary.x, y=bary.y, z=bary.z),
             avg_counts=avg_counts, max_counts=max_counts, min_counts=min_counts,
             total_counts=sum_counts,
             occupancy_per_slot=occupancy_per_slot, avg_occupancy=avg_occupancy,
-            nbins=nbins)
+            nbins=nbins, pixel_size_mm=pixel_size_mm,
+            avg_n_pixels_above_threshold=avg_n_pixels_above_threshold,
+            avg_max_signal=avg_max_signal, avg_min_signal=avg_min_signal,
+            avg_mean_signal=avg_mean_signal)
 end
 
 """
@@ -310,9 +392,10 @@ Arguments:
 Returns a combined plot with 4 heatmaps in a 2x2 layout.
 """
 function plot_occupancy_heatmaps(occ; event_id::Int=0)
-    # Get nbins from occupancy result
+    # Get nbins and pixel_size from occupancy result
     nbins = occ.nbins
-    pixel_grid_size = nbins * PIXEL_SIZE_MM
+    pixel_size_mm = occ.pixel_size_mm
+    pixel_grid_size = nbins * pixel_size_mm
 
     # Create axis labels (relative to barycenter)
     half_grid = pixel_grid_size / 2.0
@@ -335,21 +418,22 @@ function plot_occupancy_heatmaps(occ; event_id::Int=0)
         titlefontsize=9
     )
 
-    # Heatmap 1: Average counts
-    p1 = heatmap(occ.avg_counts', c=:viridis, title="Avg Counts/Bin"; common_opts...)
+    # Heatmap 1: Average ion counts
+    p1 = heatmap(occ.avg_counts', c=:viridis, title="Avg Ions/Bin"; common_opts...)
 
-    # Heatmap 2: Maximum counts
-    p2 = heatmap(occ.max_counts', c=:hot, title="Max Counts/Bin"; common_opts...)
+    # Heatmap 2: Maximum ion counts
+    p2 = heatmap(occ.max_counts', c=:hot, title="Max Ions/Bin"; common_opts...)
 
-    # Heatmap 3: Minimum counts (already has NaN for bins never hit)
-    p3 = heatmap(occ.min_counts', c=:blues, title="Min Counts/Bin (≥1)"; common_opts...)
+    # Heatmap 3: Minimum ion counts (already has NaN for bins never hit)
+    p3 = heatmap(occ.min_counts', c=:blues, title="Min Ions/Bin (>0)"; common_opts...)
 
-    # Heatmap 4: Total counts (projected)
-    p4 = heatmap(occ.total_counts', c=:inferno, title="Total (Projected)"; common_opts...)
+    # Heatmap 4: Total ion counts (projected)
+    p4 = heatmap(occ.total_counts', c=:inferno, title="Total Ions (Projected)"; common_opts...)
 
     # Combine into 2x2 layout
-    title_str = event_id > 0 ? "Pixel Occupancy - Event $event_id ($(occ.n_time_slots) slots, $(nbins)x$(nbins))" :
-                               "Pixel Occupancy ($(occ.n_time_slots) slots, $(nbins)x$(nbins))"
+    pixel_str = isinteger(pixel_size_mm) ? "$(Int(pixel_size_mm))" : "$pixel_size_mm"
+    title_str = event_id > 0 ? "Ion Occupancy - Event $event_id ($(occ.n_time_slots) slots, $(nbins)x$(nbins), $(pixel_str)mm pixels)" :
+                               "Ion Occupancy ($(occ.n_time_slots) slots, $(nbins)x$(nbins), $(pixel_str)mm pixels)"
     plt = plot(p1, p2, p3, p4, layout=(2, 2), size=(800, 750),
                plot_title=title_str, plot_titlefontsize=10)
 
@@ -650,34 +734,48 @@ struct EventStats
     voxel_min_distances::Vector{Float64}  # Closest neighbor distance for each voxel
     # Single-track analysis (only computed for 1-track events)
     z_length::Float64                   # Longitudinal extension of main track (mm)
+    x_extent::Float64                   # Track bounding box X extent (mm)
+    y_extent::Float64                   # Track bounding box Y extent (mm)
     avg_occupancy::Float64              # Average pixel occupancy per time slot
     n_time_slots::Int                   # Number of 2mm time slots
     occupancy_per_slot::Vector{Float64} # Occupancy per time slot
+    # Pixel signal statistics (single-track, averaged over time slots)
+    avg_n_pixels_above_threshold::Float64  # Avg number of pixels with signal > 10 ions
+    avg_max_signal::Float64                # Avg of max signal per time slot
+    avg_min_signal::Float64                # Avg of min signal (above threshold) per time slot
+    avg_mean_signal::Float64               # Avg of mean signal (above threshold) per time slot
 end
 
 """
-    plot_statistics(stats::Vector{EventStats})
+    plot_statistics(stats::Vector{EventStats}; grid_size::Float64=160.0, pixel_size_mm::Float64=2.0)
 
 Plot summary statistics from batch processing.
-Returns two plot frames:
-- Frame 1 (2x3): Track multiplicity, Track 2 energy, Track 3+ energy, Main track energy, Voxel distances, Total energy
-- Frame 2 (1x2): Track 1 voxels, Track 2 voxels
+Returns three plot frames:
+- Frame 1 (2x2): Track multiplicity, Total energy, Pixel occupancy %, Track 2 energy
+- Frame 2 (1x2): Z-length histogram, Track bounding box 2D histogram
+- Frame 3 (2x2): Ion occupancy heatmaps (sample event)
 """
-function plot_statistics(stats::Vector{EventStats})
+function plot_statistics(stats::Vector{EventStats}; grid_size::Float64=160.0, pixel_size_mm::Float64=2.0)
     n_events = length(stats)
     if n_events == 0
         println("No events to plot.")
-        return nothing, nothing
+        return nothing, nothing, nothing
     end
+
+    # Compute nbins from grid_size / pixel_size
+    nbins = round(Int, grid_size / pixel_size_mm)
 
     # Extract data
     n_tracks_vec = [s.n_tracks for s in stats]
     total_energies = [s.total_energy_keV for s in stats]
-    main_track_energies = [s.main_track_energy_keV for s in stats]
 
     # Count track multiplicities
     max_tracks = maximum(n_tracks_vec)
     track_counts = [count(==(i), n_tracks_vec) for i in 0:max_tracks]
+
+    # =========================================================================
+    # FRAME 1 (2x2): Track multiplicity, Total energy, Pixel occupancy, Track 2 energy
+    # =========================================================================
 
     # === Plot 1: Number of tracks histogram ===
     p1 = bar(0:max_tracks, track_counts,
@@ -698,131 +796,76 @@ function plot_statistics(stats::Vector{EventStats})
         end
     end
 
-    # === Plot 2: Track 2 energy (for events with ≥2 tracks) ===
-    track2_energies = [s.track2_energy_keV for s in stats if s.n_tracks >= 2]
-    if !isempty(track2_energies)
-        p2 = histogram(track2_energies, bins=50,
-                       xlabel="Energy (keV)", ylabel="Events",
-                       title="Track 2 Energy", titlefontsize=9,
-                       legend=false, color=:blue)
-    else
-        p2 = plot(title="Track 2 Energy\n(no data)", titlefontsize=9, legend=false)
-    end
-
-    # === Plot 3: Track 3+ energy (for events with ≥3 tracks) ===
-    track3plus_energies = [s.track3plus_energy_keV for s in stats if s.n_tracks >= 3]
-    if !isempty(track3plus_energies)
-        p3 = histogram(track3plus_energies, bins=50,
-                       xlabel="Energy (keV)", ylabel="Events",
-                       title="Track 3+ Energy", titlefontsize=9,
-                       legend=false, color=:green)
-    else
-        p3 = plot(title="Track 3+ Energy\n(no data)", titlefontsize=9, legend=false)
-    end
-
-    # === Plot 4: Main track energy (for events with ≥1 track) ===
-    main_energies_valid = [s.main_track_energy_keV for s in stats if s.n_tracks > 0]
-    p4 = histogram(main_energies_valid, bins=50,
-                   xlabel="Energy (keV)", ylabel="Events",
-                   title="Main Track Energy", titlefontsize=9,
-                   legend=false, color=:orange)
-
-    # === Plot 5: Voxel closest neighbor distances ===
-    # Collect all voxel distances from all events
-    all_voxel_dists = Float64[]
-    for s in stats
-        append!(all_voxel_dists, s.voxel_min_distances)
-    end
-    if !isempty(all_voxel_dists)
-        # Use logarithmic bins for log-log plot
-        min_d = max(minimum(all_voxel_dists), 0.01)  # Avoid log(0)
-        max_d = maximum(all_voxel_dists)
-        log_edges = 10 .^ range(log10(min_d), log10(max_d), length=51)
-        # Compute histogram manually using StatsBase
-        h = fit(Histogram, all_voxel_dists, log_edges)
-        # Get bin centers (geometric mean for log scale)
-        bin_centers = sqrt.(log_edges[1:end-1] .* log_edges[2:end])
-        counts = h.weights
-        # Filter out zero counts for log scale
-        valid = counts .> 0
-        p5 = scatter(bin_centers[valid], counts[valid],
-                     xlabel="Distance (mm)", ylabel="Count",
-                     title="Voxel NN Dist", titlefontsize=9,
-                     legend=false, color=:purple, ms=4,
-                     xscale=:log10, yscale=:log10)
-    else
-        p5 = plot(title="Voxel NN Dist\n(no data)", titlefontsize=9, legend=false)
-    end
-
-    # === Plot 6: Total energy distribution ===
-    p6 = histogram(total_energies, bins=50,
+    # === Plot 2: Total energy distribution ===
+    p2 = histogram(total_energies, bins=50,
                    xlabel="Energy (keV)", ylabel="Events",
                    title="Total Energy", titlefontsize=9,
                    legend=false, color=:red)
 
-    # Combine into layout (2 rows x 3 columns) - Frame 1
-    l1 = @layout [a b c; d e f]
-    plt1 = plot(p1, p2, p3, p4, p5, p6, layout=l1, size=(1200, 700),
-                plot_title="Statistics (N=$n_events)", plot_titlefontsize=10)
-
-    # === Frame 2: Voxel counts for Track 1 and Track 2 ===
-
-    # Track 1 voxels (for events with ≥1 track)
-    track1_voxels = [s.main_track_voxels for s in stats if s.n_tracks > 0]
-    if !isempty(track1_voxels)
-        p7 = histogram(track1_voxels, bins=50,
-                       xlabel="N Voxels", ylabel="Events",
-                       title="Track 1 Voxels", titlefontsize=9,
-                       legend=false, color=:orange)
+    # === Plot 3: Pixel occupancy % (for single-track events only) ===
+    avg_occupancies = [s.avg_occupancy for s in stats if s.n_tracks == 1 && s.avg_occupancy > 0]
+    if !isempty(avg_occupancies)
+        p3 = histogram(100.0 .* avg_occupancies, bins=30,
+                       xlabel="Avg Occupancy (%)", ylabel="Events",
+                       title="Pixel Occupancy (1-trk)", titlefontsize=9,
+                       legend=false, color=:coral)
     else
-        p7 = plot(title="Track 1 Voxels\n(no data)", titlefontsize=9, legend=false)
+        p3 = plot(title="Pixel Occupancy\n(no 1-trk data)", titlefontsize=9, legend=false)
     end
 
-    # Track 2 voxels (for events with ≥2 tracks)
-    track2_voxels_vec = [s.track2_voxels for s in stats if s.n_tracks >= 2]
-    if !isempty(track2_voxels_vec)
-        p8 = histogram(track2_voxels_vec, bins=50,
-                       xlabel="N Voxels", ylabel="Events",
-                       title="Track 2 Voxels", titlefontsize=9,
+    # === Plot 4: Track 2 energy (for events with ≥2 tracks) ===
+    track2_energies = [s.track2_energy_keV for s in stats if s.n_tracks >= 2]
+    if !isempty(track2_energies)
+        p4 = histogram(track2_energies, bins=50,
+                       xlabel="Energy (keV)", ylabel="Events",
+                       title="Track 2 Energy", titlefontsize=9,
                        legend=false, color=:blue)
     else
-        p8 = plot(title="Track 2 Voxels\n(no data)", titlefontsize=9, legend=false)
+        p4 = plot(title="Track 2 Energy\n(no data)", titlefontsize=9, legend=false)
     end
 
-    # Frame 2: Track voxel counts
-    plt2 = plot(p7, p8, layout=(1, 2), size=(900, 400),
-                plot_title="Voxel Counts (N=$n_events)", plot_titlefontsize=10)
+    # Combine into layout (2x2) - Frame 1
+    plt1 = plot(p1, p2, p3, p4, layout=(2, 2), size=(900, 700),
+                plot_title="Statistics (N=$n_events)", plot_titlefontsize=10)
 
-    # === Frame 3: Single-track analysis (z-length and occupancy) ===
+    # =========================================================================
+    # FRAME 2 (1x2): Z-length histogram, Track bounding box 2D histogram
+    # =========================================================================
 
     # Z-length histogram (for single-track events only)
     z_lengths = [s.z_length for s in stats if s.n_tracks == 1 && s.z_length > 0]
     if !isempty(z_lengths)
-        p9 = histogram(z_lengths, bins=50,
+        p5 = histogram(z_lengths, bins=50,
                        xlabel="Z-length (mm)", ylabel="Events",
                        title="Track Z-Extension (1-trk)", titlefontsize=9,
                        legend=false, color=:teal)
     else
-        p9 = plot(title="Track Z-Extension\n(no 1-trk data)", titlefontsize=9, legend=false)
+        p5 = plot(title="Track Z-Extension\n(no 1-trk data)", titlefontsize=9, legend=false)
     end
 
-    # Average occupancy histogram (for single-track events only)
-    avg_occupancies = [s.avg_occupancy for s in stats if s.n_tracks == 1 && s.avg_occupancy > 0]
-    if !isempty(avg_occupancies)
-        p10 = histogram(100.0 .* avg_occupancies, bins=30,
-                        xlabel="Avg Occupancy (%)", ylabel="Events",
-                        title="Avg Pixel Occupancy (1-trk)", titlefontsize=9,
-                        legend=false, color=:coral)
+    # Track bounding box 2D histogram (for single-track events only)
+    x_extents = [s.x_extent for s in stats if s.n_tracks == 1 && s.x_extent > 0]
+    y_extents = [s.y_extent for s in stats if s.n_tracks == 1 && s.y_extent > 0]
+
+    if !isempty(x_extents) && !isempty(y_extents)
+        # Range: 0 to grid_size, bins = grid_size / pixel_size
+        edges = range(0, grid_size, length=nbins + 1)
+        p6 = histogram2d(x_extents, y_extents, bins=(edges, edges),
+                         xlabel="X Extent (mm)", ylabel="Y Extent (mm)",
+                         title="Track Bounding Box (1-trk)", titlefontsize=9,
+                         c=:viridis, colorbar=true, aspect_ratio=:equal)
     else
-        p10 = plot(title="Avg Pixel Occupancy\n(no 1-trk data)", titlefontsize=9, legend=false)
+        p6 = plot(title="Track Bounding Box\n(no 1-trk data)", titlefontsize=9, legend=false)
     end
 
-    # Frame 3: Single-track analysis
+    # Frame 2: Z-length and bounding box
     n_single_track = count(s -> s.n_tracks == 1, stats)
-    plt3 = plot(p9, p10, layout=(1, 2), size=(900, 400),
+    plt2 = plot(p5, p6, layout=(1, 2), size=(1000, 450),
                 plot_title="Single-Track Analysis (N=$n_single_track)", plot_titlefontsize=10)
 
-    return plt1, plt2, plt3
+    # Frame 3 is handled separately (occupancy heatmaps from sample event)
+    # Return nothing for plt3 - it will be generated from sample_occ in batch mode
+    return plt1, plt2, nothing
 end
 
 """
@@ -902,6 +945,16 @@ function print_statistics_summary(stats::Vector{EventStats})
             println("  Z-extension: mean=$(round(mean(z_lengths), digits=1)) mm, std=$(round(std(z_lengths), digits=1)) mm")
         end
 
+        x_extents = [s.x_extent for s in single_track_stats if s.x_extent > 0]
+        if !isempty(x_extents)
+            println("  X-extent: mean=$(round(mean(x_extents), digits=1)) mm, std=$(round(std(x_extents), digits=1)) mm")
+        end
+
+        y_extents = [s.y_extent for s in single_track_stats if s.y_extent > 0]
+        if !isempty(y_extents)
+            println("  Y-extent: mean=$(round(mean(y_extents), digits=1)) mm, std=$(round(std(y_extents), digits=1)) mm")
+        end
+
         avg_occupancies = [100 * s.avg_occupancy for s in single_track_stats if s.avg_occupancy > 0]
         if !isempty(avg_occupancies)
             println("  Avg occupancy: mean=$(round(mean(avg_occupancies), digits=1))%, std=$(round(std(avg_occupancies), digits=1))%")
@@ -920,17 +973,21 @@ count_equal(vec, val) = count(==(val), vec)
 
 """
     create_results_dir(input_file::String, voxel_size::Float64, max_distance::Float64;
-                       sigmat::Float64=0.0, sigmal::Float64=0.1)
+                       sigmat::Float64=0.0, sigmal::Float64=0.1,
+                       energy_threshold::Float64=0.0,
+                       ievt::Int=1, levt::Int=-1)
 
 Create a results directory based on the input filename and parameters.
 The directory is created under the script directory (itacaScripts/).
 Directory name format:
-- Without diffusion: <basename>_voxel_<X>mm_maxd_<Y>mm
-- With diffusion: <basename>_sigmat_<S>mm_sigmal_<L>mm_voxel_<X>mm_maxd_<Y>mm
+- Without diffusion: <basename>_voxel_<X>mm_maxd_<Y>mm_ethr_<E>keV_evt_<ievt>_<levt>
+- With diffusion: <basename>_sigmat_<S>mm_sigmal_<L>mm_voxel_<X>mm_maxd_<Y>mm_ethr_<E>keV_evt_<ievt>_<levt>
 Returns the path to the created directory.
 """
 function create_results_dir(input_file::String, voxel_size::Float64, max_distance::Float64;
-                            sigmat::Float64=0.0, sigmal::Float64=0.1)
+                            sigmat::Float64=0.0, sigmal::Float64=0.1,
+                            energy_threshold::Float64=0.0,
+                            ievt::Int=1, levt::Int=-1)
     # Get the directory where this script lives
     script_dir = dirname(@__FILE__)
 
@@ -947,14 +1004,21 @@ function create_results_dir(input_file::String, voxel_size::Float64, max_distanc
         maxd_str = replace(string(round(max_distance, digits=2)), r"\.0$" => "")
     end
 
+    # Format event range
+    levt_str = levt < 0 ? "end" : string(levt)
+    evt_str = "evt_$(ievt)_$(levt_str)"
+
+    # Format energy threshold
+    ethr_str = replace(string(round(energy_threshold, digits=1)), r"\.0$" => "")
+
     # Build directory name
     if sigmat > 0.0
         # Include diffusion parameters
         sigmat_str = replace(string(round(sigmat, digits=2)), r"\.0$" => "")
         sigmal_str = replace(string(round(sigmal, digits=2)), r"\.0$" => "")
-        results_dir = joinpath(script_dir, "$(base_name)_sigmat_$(sigmat_str)mm_sigmal_$(sigmal_str)mm_voxel_$(voxel_str)mm_maxd_$(maxd_str)mm")
+        results_dir = joinpath(script_dir, "$(base_name)_sigmat_$(sigmat_str)mm_sigmal_$(sigmal_str)mm_voxel_$(voxel_str)mm_maxd_$(maxd_str)mm_ethr_$(ethr_str)keV_$(evt_str)")
     else
-        results_dir = joinpath(script_dir, "$(base_name)_voxel_$(voxel_str)mm_maxd_$(maxd_str)mm")
+        results_dir = joinpath(script_dir, "$(base_name)_voxel_$(voxel_str)mm_maxd_$(maxd_str)mm_ethr_$(ethr_str)keV_$(evt_str)")
     end
 
     if !isdir(results_dir)
@@ -968,11 +1032,13 @@ function create_results_dir(input_file::String, voxel_size::Float64, max_distanc
 end
 
 """
-    save_statistics_json(stats::Vector{EventStats}, results_dir::String, params::Dict; nbins::Int=50)
+    save_statistics_json(stats::Vector{EventStats}, results_dir::String, params::Dict;
+                         nbins::Int=50, pixel_size_mm::Float64=2.0, grid_size::Float64=160.0)
 
 Save statistics to a JSON file.
 """
-function save_statistics_json(stats::Vector{EventStats}, results_dir::String, params::Dict; nbins::Int=50)
+function save_statistics_json(stats::Vector{EventStats}, results_dir::String, params::Dict;
+                              nbins::Int=50, pixel_size_mm::Float64=2.0, grid_size::Float64=160.0)
     n_events = length(stats)
 
     # Extract summary statistics
@@ -993,6 +1059,8 @@ function save_statistics_json(stats::Vector{EventStats}, results_dir::String, pa
     # Single-track analysis data
     single_track_stats = filter(s -> s.n_tracks == 1, stats)
     z_lengths = [s.z_length for s in single_track_stats if s.z_length > 0]
+    x_extents = [s.x_extent for s in single_track_stats if s.x_extent > 0]
+    y_extents = [s.y_extent for s in single_track_stats if s.y_extent > 0]
     avg_occupancies = [s.avg_occupancy for s in single_track_stats if s.avg_occupancy > 0]
 
     # Track multiplicity counts
@@ -1064,6 +1132,18 @@ function save_statistics_json(stats::Vector{EventStats}, results_dir::String, pa
                 "min" => round(minimum(z_lengths), digits=2),
                 "max" => round(maximum(z_lengths), digits=2)
             ),
+            "x_extent_mm" => isempty(x_extents) ? nothing : Dict(
+                "mean" => round(mean(x_extents), digits=2),
+                "std" => round(std(x_extents), digits=2),
+                "min" => round(minimum(x_extents), digits=2),
+                "max" => round(maximum(x_extents), digits=2)
+            ),
+            "y_extent_mm" => isempty(y_extents) ? nothing : Dict(
+                "mean" => round(mean(y_extents), digits=2),
+                "std" => round(std(y_extents), digits=2),
+                "min" => round(minimum(y_extents), digits=2),
+                "max" => round(maximum(y_extents), digits=2)
+            ),
             "avg_occupancy_pct" => isempty(avg_occupancies) ? nothing : Dict(
                 "mean" => round(100 * mean(avg_occupancies), digits=2),
                 "std" => round(100 * std(avg_occupancies), digits=2),
@@ -1072,7 +1152,8 @@ function save_statistics_json(stats::Vector{EventStats}, results_dir::String, pa
             ),
             "pixel_grid" => Dict(
                 "nbins" => nbins,
-                "pixel_size_mm" => PIXEL_SIZE_MM,
+                "pixel_size_mm" => pixel_size_mm,
+                "grid_size_mm" => grid_size,
                 "time_slot_mm" => TIME_SLOT_MM
             )
         ),
@@ -1089,6 +1170,8 @@ function save_statistics_json(stats::Vector{EventStats}, results_dir::String, pa
                 "track2_voxels" => s.track2_voxels,
                 "track3plus_energy_keV" => round(s.track3plus_energy_keV, digits=2),
                 "z_length_mm" => s.n_tracks == 1 ? round(s.z_length, digits=2) : nothing,
+                "x_extent_mm" => s.n_tracks == 1 ? round(s.x_extent, digits=2) : nothing,
+                "y_extent_mm" => s.n_tracks == 1 ? round(s.y_extent, digits=2) : nothing,
                 "avg_occupancy_pct" => s.n_tracks == 1 ? round(100 * s.avg_occupancy, digits=2) : nothing,
                 "n_time_slots" => s.n_tracks == 1 ? s.n_time_slots : nothing
             ) for s in stats
@@ -1106,28 +1189,103 @@ function save_statistics_json(stats::Vector{EventStats}, results_dir::String, pa
 end
 
 """
+    save_statistics_csv(stats::Vector{EventStats}, results_dir::String)
+
+Save statistics to two CSV files for easy merging of independent batch jobs:
+
+1. `event_stats.csv` - All events with general track statistics:
+   - event_id, n_hits, n_voxels, n_tracks, total_energy_keV
+   - main_track_energy_keV, main_track_voxels
+   - track2_energy_keV, track2_voxels, track3plus_energy_keV
+   - track1_track2_distance_mm (closest voxel distance between track 1 and 2, 0 if no track 2)
+
+2. `single_track_stats.csv` - Only events with n_tracks == 1:
+   - event_id, total_energy_keV, n_voxels
+   - z_length_mm, x_extent_mm, y_extent_mm
+   - avg_occupancy, n_time_slots
+   - avg_n_pixels_above_threshold (avg number of pixels with signal > 10 ions per time slot)
+   - avg_max_signal (avg of max signal per time slot)
+   - avg_min_signal (avg of min signal above threshold per time slot)
+   - avg_mean_signal (avg of mean signal above threshold per time slot)
+
+Returns tuple of (event_stats_path, single_track_stats_path).
+"""
+function save_statistics_csv(stats::Vector{EventStats}, results_dir::String)
+    # Build event_stats DataFrame (all events)
+    event_stats_df = DataFrame(
+        event_id = [s.event_id for s in stats],
+        n_hits = [s.n_hits for s in stats],
+        n_voxels = [s.n_voxels for s in stats],
+        n_tracks = [s.n_tracks for s in stats],
+        total_energy_keV = [round(s.total_energy_keV, digits=2) for s in stats],
+        main_track_energy_keV = [round(s.main_track_energy_keV, digits=2) for s in stats],
+        main_track_voxels = [s.main_track_voxels for s in stats],
+        track2_energy_keV = [round(s.track2_energy_keV, digits=2) for s in stats],
+        track2_voxels = [s.track2_voxels for s in stats],
+        track3plus_energy_keV = [round(s.track3plus_energy_keV, digits=2) for s in stats],
+        track1_track2_distance_mm = [
+            isempty(s.satellite_distances) ? 0.0 : round(s.satellite_distances[1], digits=2)
+            for s in stats
+        ]
+    )
+
+    # Save event_stats.csv
+    event_stats_path = joinpath(results_dir, "event_stats.csv")
+    CSV.write(event_stats_path, event_stats_df)
+    println("Saved event statistics to: $event_stats_path")
+
+    # Build single_track_stats DataFrame (only n_tracks == 1)
+    single_track_events = filter(s -> s.n_tracks == 1, stats)
+
+    single_track_df = DataFrame(
+        event_id = [s.event_id for s in single_track_events],
+        total_energy_keV = [round(s.total_energy_keV, digits=2) for s in single_track_events],
+        n_voxels = [s.n_voxels for s in single_track_events],
+        z_length_mm = [round(s.z_length, digits=2) for s in single_track_events],
+        x_extent_mm = [round(s.x_extent, digits=2) for s in single_track_events],
+        y_extent_mm = [round(s.y_extent, digits=2) for s in single_track_events],
+        avg_occupancy = [round(s.avg_occupancy, digits=4) for s in single_track_events],
+        n_time_slots = [s.n_time_slots for s in single_track_events],
+        avg_n_pixels_above_threshold = [round(s.avg_n_pixels_above_threshold, digits=2) for s in single_track_events],
+        avg_max_signal = [round(s.avg_max_signal, digits=1) for s in single_track_events],
+        avg_min_signal = [round(s.avg_min_signal, digits=1) for s in single_track_events],
+        avg_mean_signal = [round(s.avg_mean_signal, digits=1) for s in single_track_events]
+    )
+
+    # Save single_track_stats.csv
+    single_track_path = joinpath(results_dir, "single_track_stats.csv")
+    CSV.write(single_track_path, single_track_df)
+    println("Saved single-track statistics to: $single_track_path ($(nrow(single_track_df)) events)")
+
+    return (event_stats_path, single_track_path)
+end
+
+"""
     save_plots(plt1, plt2, plt3, results_dir::String)
 
 Save plots as PNG files:
-- statistics_summary.png: Energy and track multiplicity
-- voxel_counts.png: Track voxel counts
-- single_track_analysis.png: Z-length and occupancy for single-track events
+- statistics_summary.png: Track multiplicity, total energy, pixel occupancy, track 2 energy (Frame 1)
+- single_track_analysis.png: Z-length and bounding box 2D histogram (Frame 2)
+- sample_occupancy_heatmaps.png: Ion occupancy heatmaps from sample event (Frame 3, if available)
 """
 function save_plots(plt1, plt2, plt3, results_dir::String)
-    # Save main statistics plot
+    # Save main statistics plot (Frame 1)
     plot1_path = joinpath(results_dir, "statistics_summary.png")
     savefig(plt1, plot1_path)
     println("Saved plot to: $plot1_path")
 
-    # Save voxel counts plot
-    plot2_path = joinpath(results_dir, "voxel_counts.png")
+    # Save single-track analysis plot (Frame 2: z-length and bounding box)
+    plot2_path = joinpath(results_dir, "single_track_analysis.png")
     savefig(plt2, plot2_path)
     println("Saved plot to: $plot2_path")
 
-    # Save single-track analysis plot
-    plot3_path = joinpath(results_dir, "single_track_analysis.png")
-    savefig(plt3, plot3_path)
-    println("Saved plot to: $plot3_path")
+    # Save sample occupancy heatmaps (Frame 3, if available)
+    plot3_path = nothing
+    if plt3 !== nothing
+        plot3_path = joinpath(results_dir, "sample_occupancy_heatmaps.png")
+        savefig(plt3, plot3_path)
+        println("Saved plot to: $plot3_path")
+    end
 
     return plot1_path, plot2_path, plot3_path
 end
@@ -1149,7 +1307,7 @@ Main function to process events.
 - max_distance: Max distance (default: Inf for kNN, 2.5*voxel_size for KDT)
 - sigmat=0.0: Transverse diffusion sigma in mm (0 = no diffusion)
 - sigmal=0.1: Longitudinal diffusion sigma in mm (only used if sigmat > 0)
-- nbins=50: Number of bins for pixel occupancy grid (nbins x nbins)
+- grid_size=160.0: Grid size for occupancy histograms in mm (nbins = grid_size / pixel_size)
 """
 function process_events(cmdir::String, input_file::String;
                         voxel_size::Float64,
@@ -1158,13 +1316,13 @@ function process_events(cmdir::String, input_file::String;
                         k::Int=10,
                         ievt::Int=1,
                         levt::Int=-1,
-                        energy_threshold::Float64=10.0,
+                        energy_threshold::Float64=0.0,
                         batch::Bool=false,
                         readdir::Bool=false,
                         save_results::Bool=true,
                         sigmat::Float64=0.0,
                         sigmal::Float64=0.1,
-                        nbins::Int=50)
+                        grid_size::Float64=160.0)
 
     # Set default max_distance if not provided
     # For kNN: default is Inf (no cutoff), for KDT: default is 2.5 * voxel_size
@@ -1176,7 +1334,9 @@ function process_events(cmdir::String, input_file::String;
     results_dir = nothing
     if save_results
         results_dir = create_results_dir(input_file, voxel_size, max_distance;
-                                         sigmat=sigmat, sigmal=sigmal)
+                                         sigmat=sigmat, sigmal=sigmal,
+                                         energy_threshold=energy_threshold,
+                                         ievt=ievt, levt=levt)
     end
 
     # Load data
@@ -1403,21 +1563,42 @@ function process_events(cmdir::String, input_file::String;
 
         distances = compute_track_distances(tracks)
 
-        # Compute z-length and occupancy analysis for single-track events
+        # Compute z-length, bounding box, and occupancy analysis for single-track events
         z_length = 0.0
+        x_extent = 0.0
+        y_extent = 0.0
         avg_occupancy = 0.0
         n_time_slots = 0
         occupancy_per_slot = Float64[]
         occ = nothing  # Store full occupancy result for plotting
+        # New pixel signal statistics
+        avg_n_pixels_above_threshold = 0.0
+        avg_max_signal = 0.0
+        avg_min_signal = 0.0
+        avg_mean_signal = 0.0
 
         if n_tracks == 1
             z_ext = compute_track_z_extension(tracks[1])
             z_length = z_ext.z_length
 
-            occ = compute_occupancy_analysis(tracks[1]; nbins=nbins)
+            # Compute bounding box
+            bbox = compute_track_bbox(tracks[1])
+            x_extent = bbox.x_extent
+            y_extent = bbox.y_extent
+
+            # Use max_distance as pixel size (they should match for consistent analysis)
+            pixel_size_for_occ = isinf(max_distance) ? voxel_size : max_distance
+            # Compute nbins from grid_size / pixel_size
+            nbins = round(Int, grid_size / pixel_size_for_occ)
+            occ = compute_occupancy_analysis(tracks[1]; pixel_size_mm=pixel_size_for_occ, nbins=nbins)
             avg_occupancy = occ.avg_occupancy
             n_time_slots = occ.n_time_slots
             occupancy_per_slot = occ.occupancy_per_slot
+            # Extract new pixel signal statistics
+            avg_n_pixels_above_threshold = occ.avg_n_pixels_above_threshold
+            avg_max_signal = occ.avg_max_signal
+            avg_min_signal = occ.avg_min_signal
+            avg_mean_signal = occ.avg_mean_signal
 
             # Store first single-track occupancy for batch mode heatmaps
             if sample_occ === nothing
@@ -1433,7 +1614,8 @@ function process_events(cmdir::String, input_file::String;
             track2_energy, track2_voxels, track3plus_energy,
             distances.satellite_distances,
             voxel_min_dists,
-            z_length, avg_occupancy, n_time_slots, occupancy_per_slot
+            z_length, x_extent, y_extent, avg_occupancy, n_time_slots, occupancy_per_slot,
+            avg_n_pixels_above_threshold, avg_max_signal, avg_min_signal, avg_mean_signal
         ))
 
         if !batch
@@ -1514,15 +1696,18 @@ function process_events(cmdir::String, input_file::String;
         # Print statistics summary
         print_statistics_summary(all_stats)
 
+        # Compute pixel size for occupancy analysis
+        pixel_size_for_occ = isinf(max_distance) ? voxel_size : max_distance
+
         # Plot statistics (three frames)
         println("\nGenerating summary plots...")
-        plt1, plt2, plt3 = plot_statistics(all_stats)
+        plt1, plt2, _ = plot_statistics(all_stats; grid_size=grid_size, pixel_size_mm=pixel_size_for_occ)
 
-        # Generate sample occupancy heatmaps if we have single-track data
-        plt_occ = nothing
+        # Generate sample occupancy heatmaps (Frame 3) if we have single-track data
+        plt3 = nothing
         if sample_occ !== nothing
             println("Generating sample occupancy heatmaps (Event $sample_occ_event_id)...")
-            plt_occ = plot_occupancy_heatmaps(sample_occ; event_id=sample_occ_event_id)
+            plt3 = plot_occupancy_heatmaps(sample_occ; event_id=sample_occ_event_id)
         end
 
         # Save results if requested
@@ -1537,40 +1722,32 @@ function process_events(cmdir::String, input_file::String;
                 "k" => method == "kNN" ? k : nothing,
                 "max_distance_mm" => isinf(max_distance) ? "Inf" : max_distance,
                 "energy_threshold_keV" => energy_threshold,
+                "grid_size_mm" => grid_size,
                 "ievt" => ievt,
                 "levt" => levt,
                 "input_file" => input_file,
                 "cmdir" => cmdir
             )
-            save_statistics_json(all_stats, results_dir, params; nbins=nbins)
+            nbins_for_save = round(Int, grid_size / pixel_size_for_occ)
+            save_statistics_json(all_stats, results_dir, params; nbins=nbins_for_save, pixel_size_mm=pixel_size_for_occ, grid_size=grid_size)
+            save_statistics_csv(all_stats, results_dir)
             save_plots(plt1, plt2, plt3, results_dir)
+        end
 
-            # Save sample occupancy heatmaps
-            if plt_occ !== nothing
-                occ_path = joinpath(results_dir, "sample_occupancy_heatmaps.png")
-                savefig(plt_occ, occ_path)
-                println("Saved plot to: $occ_path")
+        # Display plots interactively (skip in batch mode)
+        if !batch
+            display(plt1)
+            wait_for_enter("Press Enter for single-track analysis...")
+
+            display(plt2)
+
+            if plt3 !== nothing
+                wait_for_enter("Press Enter for sample occupancy heatmaps...")
+                display(plt3)
             end
+
+            wait_for_enter("Press Enter to exit...")
         end
-
-        # Display first frame (energy and general statistics)
-        display(plt1)
-        wait_for_enter("Press Enter for voxel count plots...")
-
-        # Display second frame (voxel counts)
-        display(plt2)
-        wait_for_enter("Press Enter for single-track analysis...")
-
-        # Display third frame (single-track analysis)
-        display(plt3)
-
-        # Display sample occupancy heatmaps if available
-        if plt_occ !== nothing
-            wait_for_enter("Press Enter for sample occupancy heatmaps...")
-            display(plt_occ)
-        end
-
-        wait_for_enter("Press Enter to exit...")
     end
 
     println("\n" * "=" ^ 70)
@@ -1605,10 +1782,10 @@ function main()
         println("  --ievt=N              First event to process (default: 1)")
         println("  --levt=N              Last event to process (default: -1, all)")
         println("  --energy-threshold=X  Energy threshold in keV (default: 1.0)")
+        println("  --grid-size=X         Grid size for occupancy histograms in mm (default: 160)")
         println("  --batch               Run in batch mode (no interactive plots)")
         println("  --readdir             Read directory of part files (*_part_*.h5) and chain them")
         println("  --save-results=X      Save results to <filename>_results/ (default: true)")
-        println("  --nbins=N             Number of bins for pixel occupancy grid (default: 50)")
         println()
         println("Examples:")
         println("  # Interactive mode with kNN (default method):")
@@ -1645,13 +1822,13 @@ function main()
     max_distance = 0.0    # For KDT method
     ievt = 1
     levt = -1
-    energy_threshold = 1.0
+    energy_threshold = 0.0
     batch = false
     readdir = false       # Read directory of part files
     save_results = true   # Save results by default
     sigmat = 0.0          # Transverse diffusion (0 = no diffusion)
     sigmal = 0.1          # Longitudinal diffusion (only used if sigmat > 0)
-    nbins = 50            # Number of bins for pixel occupancy grid
+    grid_size = 160.0     # Grid size for occupancy histograms in mm
 
     # Parse optional arguments
     for arg in ARGS[3:end]
@@ -1694,8 +1871,8 @@ function main()
                     sigmat = parse(Float64, value)
                 elseif key == "sigmal"
                     sigmal = parse(Float64, value)
-                elseif key == "nbins"
-                    nbins = parse(Int, value)
+                elseif key == "grid-size"
+                    grid_size = parse(Float64, value)
                 else
                     println("Warning: Unknown argument: --$key")
                 end
@@ -1726,7 +1903,7 @@ function main()
                    save_results=save_results,
                    sigmat=sigmat,
                    sigmal=sigmal,
-                   nbins=nbins)
+                   grid_size=grid_size)
 end
 
 # Run main if script is executed directly
